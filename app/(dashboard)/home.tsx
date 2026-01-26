@@ -1,9 +1,10 @@
-import { useLoader } from "@/hooks/useLoader";
+﻿import { useLoader } from "@/hooks/useLoader";
 import { logout } from "@/services/authService";
 import { auth } from "@/services/firebase";
 import { getJournalEntries, JournalEntry } from "@/services/journalService";
-import { useRouter } from "expo-router";
-import React, { useEffect, useState } from "react";
+import MaterialIcons from "@expo/vector-icons/MaterialIcons";
+import { useFocusEffect, useRouter } from "expo-router";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -24,13 +25,19 @@ const Home = () => {
   const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
-    // Fetch user's name from Firebase auth
     const currentUser = auth.currentUser;
     if (currentUser) {
       setUserName(currentUser.displayName || "User");
     }
     fetchJournalEntries();
   }, []);
+
+  // Auto-refresh when screen comes into focus (after saving a new entry)
+  useFocusEffect(
+    useCallback(() => {
+      fetchJournalEntries();
+    }, []),
+  );
 
   const fetchJournalEntries = async () => {
     try {
@@ -91,13 +98,21 @@ const Home = () => {
 
   const renderEmptyState = () => (
     <View className="flex-1 justify-center items-center px-8 py-20">
-      <Text className="text-7xl mb-4">📝</Text>
+      <View className="w-20 h-20 bg-green-100 rounded-full items-center justify-center mb-4">
+        <MaterialIcons name="description" size={40} color="#22C55E" />
+      </View>
       <Text className="text-xl font-bold text-gray-900 mb-2">
-        No Entries Yet
+        📓 No Entries Yet
       </Text>
-      <Text className="text-gray-500 text-center text-base">
-        Start your journaling journey by adding your first note
+      <Text className="text-gray-500 text-center text-base leading-6">
+        Start your journaling journey by tapping the + button below to create
+        your first entry
       </Text>
+      <View className="mt-6 px-4 py-2 bg-green-50 rounded-lg border border-green-200">
+        <Text className="text-green-700 text-xs font-medium text-center">
+          💡 Your entries will appear here after saving
+        </Text>
+      </View>
     </View>
   );
 
@@ -106,29 +121,41 @@ const Home = () => {
       onPress={() => handleEntryPress(item)}
       className="bg-white rounded-2xl p-5 mb-4 border border-gray-100 active:bg-gray-50"
       style={{
-        elevation: 2,
+        elevation: 3,
         shadowColor: "#000",
-        shadowOpacity: 0.08,
-        shadowRadius: 8,
+        shadowOpacity: 0.1,
+        shadowRadius: 10,
         shadowOffset: { width: 0, height: 2 },
       }}
     >
       <View className="flex-row items-start justify-between mb-3">
-        <Text
-          className="text-lg font-bold text-gray-900 flex-1 pr-3"
-          numberOfLines={2}
-        >
-          {item.title}
-        </Text>
-        <View className="px-3 py-1.5 bg-green-50 rounded-lg border border-green-200">
-          <Text className="text-xs text-green-700 font-semibold">
-            {formatDate(item.date)}
+        <View className="flex-1 pr-3">
+          <Text
+            className="text-lg font-bold text-gray-900 mb-1"
+            numberOfLines={2}
+          >
+            📝 {item.title}
           </Text>
+          <View className="flex-row items-center gap-1">
+            <MaterialIcons name="calendar-today" size={14} color="#6B7280" />
+            <Text className="text-xs text-gray-500 font-medium">
+              {formatDate(item.date)}
+            </Text>
+          </View>
+        </View>
+        <View className="px-3 py-1.5 bg-green-50 rounded-full border border-green-200">
+          <MaterialIcons name="arrow-forward" size={16} color="#22C55E" />
         </View>
       </View>
-      <Text className="text-gray-600 text-sm leading-5" numberOfLines={2}>
+      <Text className="text-gray-600 text-sm leading-5" numberOfLines={3}>
         {item.content}
       </Text>
+      <View className="flex-row items-center gap-1 mt-3 pt-3 border-t border-gray-100">
+        <MaterialIcons name="description" size={12} color="#9CA3AF" />
+        <Text className="text-xs text-gray-400">
+          {item.content.length} characters
+        </Text>
+      </View>
     </Pressable>
   );
 
@@ -145,8 +172,8 @@ const Home = () => {
           shadowOffset: { width: 0, height: 2 },
         }}
       >
-        <View className="flex-row justify-between items-center mb-3">
-          <View className="flex-1">
+        <View className="flex-row items-center justify-between">
+          <View>
             <Text className="text-gray-600 text-sm font-medium mb-1">
               {getGreeting()}
             </Text>
@@ -156,15 +183,14 @@ const Home = () => {
           </View>
           <Pressable
             onPress={handleLogout}
-            className="bg-gray-100 rounded-full px-4 py-2.5 active:bg-gray-200 border border-gray-200"
+            className="bg-gray-100 rounded-full p-2.5 active:bg-gray-200 border border-gray-200"
           >
-            <Text className="text-gray-700 font-semibold text-sm">Logout</Text>
+            <MaterialIcons name="logout" size={20} color="#6B7280" />
           </Pressable>
         </View>
         <View className="flex-row items-center mt-2">
-          <View className="w-1.5 h-1.5 bg-green-500 rounded-full mr-2" />
           <Text className="text-gray-600 text-sm">
-            {journalEntries.length}{" "}
+            📔 {journalEntries.length}{" "}
             {journalEntries.length === 1 ? "entry" : "entries"} in your journal
           </Text>
         </View>
@@ -208,13 +234,13 @@ const Home = () => {
         className="absolute bottom-8 right-6 bg-green-600 rounded-full w-16 h-16 items-center justify-center active:bg-green-700 border-2 border-white"
         style={{
           elevation: 8,
-          shadowColor: "#000",
-          shadowOpacity: 0.2,
+          shadowColor: "#22C55E",
+          shadowOpacity: 0.3,
           shadowRadius: 12,
           shadowOffset: { width: 0, height: 4 },
         }}
       >
-        <Text className="text-white text-3xl font-bold">➕</Text>
+        <MaterialIcons name="add" size={32} color="#FFFFFF" />
       </TouchableOpacity>
     </View>
   );
