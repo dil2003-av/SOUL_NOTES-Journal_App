@@ -16,6 +16,8 @@ import {
   View,
 } from "react-native";
 
+const MOOD_EMOJIS = ["😊", "😢", "😡", "😰", "😴", "🤩", "😌", "🤔"];
+
 const Home = () => {
   const router = useRouter();
   const { showLoader, hideLoader, isLoading } = useLoader();
@@ -76,7 +78,10 @@ const Home = () => {
   };
 
   const handleEntryPress = (entry: JournalEntry) => {
-    router.push(`./entry/${entry.id}`);
+    router.push({
+      pathname: "./journal-detail",
+      params: { id: entry.id },
+    });
   };
 
   const formatDate = (dateString: string) => {
@@ -116,48 +121,60 @@ const Home = () => {
     </View>
   );
 
-  const renderJournalEntry = ({ item }: { item: JournalEntry }) => (
-    <Pressable
-      onPress={() => handleEntryPress(item)}
-      className="bg-white rounded-2xl p-5 mb-4 border border-gray-100 active:bg-gray-50"
-      style={{
-        elevation: 3,
-        shadowColor: "#000",
-        shadowOpacity: 0.1,
-        shadowRadius: 10,
-        shadowOffset: { width: 0, height: 2 },
-      }}
-    >
-      <View className="flex-row items-start justify-between mb-3">
-        <View className="flex-1 pr-3">
-          <Text
-            className="text-lg font-bold text-gray-900 mb-1"
-            numberOfLines={2}
-          >
-            📝 {item.title}
+  const renderJournalEntry = ({ item }: { item: JournalEntry }) =>
+    (() => {
+      const mood = MOOD_EMOJIS.find((m) => item.content.startsWith(m));
+      const previewContent = mood
+        ? item.content.replace(mood, "").trimStart()
+        : item.content;
+      const displayMood = mood || "📝";
+      return (
+        <Pressable
+          onPress={() => handleEntryPress(item)}
+          className="bg-white rounded-2xl p-5 mb-4 border border-gray-100 active:bg-gray-50"
+          style={{
+            elevation: 3,
+            shadowColor: "#000",
+            shadowOpacity: 0.1,
+            shadowRadius: 10,
+            shadowOffset: { width: 0, height: 2 },
+          }}
+        >
+          <View className="flex-row items-start justify-between mb-3">
+            <View className="flex-1 pr-3">
+              <Text
+                className="text-lg font-bold text-gray-900 mb-1"
+                numberOfLines={2}
+              >
+                {displayMood} {item.title}
+              </Text>
+              <View className="flex-row items-center gap-1">
+                <MaterialIcons
+                  name="calendar-today"
+                  size={14}
+                  color="#6B7280"
+                />
+                <Text className="text-xs text-gray-500 font-medium">
+                  {formatDate(item.date)}
+                </Text>
+              </View>
+            </View>
+            <View className="px-3 py-1.5 bg-green-50 rounded-full border border-green-200">
+              <MaterialIcons name="arrow-forward" size={16} color="#22C55E" />
+            </View>
+          </View>
+          <Text className="text-gray-600 text-sm leading-5" numberOfLines={3}>
+            {previewContent}
           </Text>
-          <View className="flex-row items-center gap-1">
-            <MaterialIcons name="calendar-today" size={14} color="#6B7280" />
-            <Text className="text-xs text-gray-500 font-medium">
-              {formatDate(item.date)}
+          <View className="flex-row items-center gap-1 mt-3 pt-3 border-t border-gray-100">
+            <MaterialIcons name="description" size={12} color="#9CA3AF" />
+            <Text className="text-xs text-gray-400">
+              {previewContent.length} characters
             </Text>
           </View>
-        </View>
-        <View className="px-3 py-1.5 bg-green-50 rounded-full border border-green-200">
-          <MaterialIcons name="arrow-forward" size={16} color="#22C55E" />
-        </View>
-      </View>
-      <Text className="text-gray-600 text-sm leading-5" numberOfLines={3}>
-        {item.content}
-      </Text>
-      <View className="flex-row items-center gap-1 mt-3 pt-3 border-t border-gray-100">
-        <MaterialIcons name="description" size={12} color="#9CA3AF" />
-        <Text className="text-xs text-gray-400">
-          {item.content.length} characters
-        </Text>
-      </View>
-    </Pressable>
-  );
+        </Pressable>
+      );
+    })();
 
   return (
     <View className="flex-1 bg-gray-50">

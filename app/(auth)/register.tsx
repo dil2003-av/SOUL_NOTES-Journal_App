@@ -52,7 +52,7 @@ export default function Register() {
         "Success",
         "Registration successful! Redirecting to login...",
       );
-      router.replace("./login");
+      router.replace("/login");
     } catch (err) {
       Alert.alert(
         "Registration Failed",

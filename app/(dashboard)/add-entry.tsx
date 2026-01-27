@@ -58,7 +58,9 @@ export default function AddEntry() {
     try {
       const entryData = {
         title: title.trim(),
-        content: content.trim(),
+        content: selectedMood
+          ? `${selectedMood} ${content.trim()}`
+          : content.trim(),
         date,
         mood: selectedMood,
       };

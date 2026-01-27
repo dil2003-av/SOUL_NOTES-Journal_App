@@ -1,5 +1,9 @@
 import { useLoader } from "@/hooks/useLoader";
-import { loginUser } from "@/services/authService";
+import {
+  getProvidersForEmail,
+  loginUser,
+  sendResetEmail,
+} from "@/services/authService";
 import { useRouter } from "expo-router";
 import React, { useState } from "react";
 import {
@@ -39,8 +43,61 @@ export default function Login() {
       await loginUser(email.trim(), password);
       Alert.alert("Success", "Login successful!");
       router.replace("/(dashboard)/home");
-    } catch (err) {
-      Alert.alert("Login Failed", "Invalid credentials. Please try again.");
+    } catch (err: any) {
+      console.log("Login error:", err);
+      let errorMessage = "Invalid credentials. Please try again.";
+
+      if (err.code === "auth/user-not-found") {
+        errorMessage = "Email not found. Please sign up first.";
+      } else if (err.code === "auth/wrong-password") {
+        errorMessage = "Wrong password. Please try again.";
+      } else if (err.code === "auth/invalid-email") {
+        errorMessage = "Invalid email format.";
+      } else if (err.code === "auth/too-many-requests") {
+        errorMessage = "Too many login attempts. Try again later.";
+      } else if (err.code === "auth/invalid-credential") {
+        // Diagnose which providers are associated with the email
+        const methods = await getProvidersForEmail(email.trim());
+        if (methods.includes("password")) {
+          // Email exists with password; likely wrong password
+          Alert.alert(
+            "Wrong password",
+            "Looks like the password is incorrect. Would you like to reset it?",
+            [
+              { text: "Cancel", style: "cancel" },
+              {
+                text: "Reset Password",
+                onPress: async () => {
+                  try {
+                    await sendResetEmail(email.trim());
+                    Alert.alert(
+                      "Email sent",
+                      "Check your inbox for reset link.",
+                    );
+                  } catch (e: any) {
+                    Alert.alert(
+                      "Failed",
+                      e?.message ?? "Could not send reset email.",
+                    );
+                  }
+                },
+              },
+            ],
+          );
+          hideLoader();
+          return;
+        } else if (methods.length > 0) {
+          // Email exists but with different provider (e.g., Google)
+          errorMessage = `This email is registered via ${methods.join(", ")}. Use that provider to sign in.`;
+        } else {
+          // No methods: email not registered
+          errorMessage = "Email not found. Please sign up first.";
+        }
+      } else if (err.message) {
+        errorMessage = err.message;
+      }
+
+      Alert.alert("Login Failed", errorMessage);
     } finally {
       hideLoader();
     }

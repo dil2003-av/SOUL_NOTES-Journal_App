@@ -1,5 +1,6 @@
+import { AuthContext } from "@/context/AuthContext";
 import { useRouter } from "expo-router";
-import React, { useEffect, useRef } from "react";
+import React, { useContext, useEffect, useRef } from "react";
 import { Animated, Dimensions, Easing, Text, View } from "react-native";
 import "../global.css";
 
@@ -7,6 +8,7 @@ const { width } = Dimensions.get("window");
 
 export default function Splash() {
   const router = useRouter();
+  const { user, loading } = useContext(AuthContext);
 
   const logoScale = useRef(new Animated.Value(0.6)).current;
   const logoOpacity = useRef(new Animated.Value(0)).current;
@@ -17,7 +19,6 @@ export default function Splash() {
   const dot2 = useRef(new Animated.Value(0)).current;
   const dot3 = useRef(new Animated.Value(0)).current;
   const dot4 = useRef(new Animated.Value(0)).current;
-
 
   useEffect(() => {
     // entrance animation
@@ -76,7 +77,7 @@ export default function Splash() {
             useNativeDriver: true,
           }),
         ]),
-                Animated.sequence([
+        Animated.sequence([
           Animated.timing(dot3, {
             toValue: -6,
             duration: 300,
@@ -105,9 +106,17 @@ export default function Splash() {
     loop();
 
     // navigate after a slightly longer delay so animations are visible
-    const timer = setTimeout(() => router.replace("./login"), 4200);
+    const timer = setTimeout(() => {
+      if (!loading) {
+        if (user) {
+          router.replace("/(dashboard)/home");
+        } else {
+          router.replace("/(auth)/login");
+        }
+      }
+    }, 4200);
     return () => clearTimeout(timer);
-  }, []);
+  }, [user, loading]);
 
   return (
     <View className="flex-1 bg-[#071029] justify-center items-center px-6">
@@ -183,7 +192,7 @@ export default function Splash() {
             transform: [{ translateY: dot3 }],
           }}
         />
-              <Animated.View
+        <Animated.View
           style={{
             width: 10,
             height: 10,
@@ -192,7 +201,7 @@ export default function Splash() {
             marginHorizontal: 6,
             transform: [{ translateY: dot4 }],
           }}
-        />  
+        />
       </View>
     </View>
   );

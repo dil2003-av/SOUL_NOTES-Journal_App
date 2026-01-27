@@ -5,7 +5,7 @@ import React from "react";
 const tabs = [
   { name: "home", title: "Home", icon: "home-filled" },
   { name: "add-entry", title: "Add", icon: "note-add" },
-  { name: "tasks", title: "Tasks", icon: "check-circle" },
+  { name: "journal-detail", title: "Journal", icon: "description" },
   { name: "profile", title: "Profile", icon: "person" },
 ] as const;
 
@@ -18,20 +18,26 @@ export default function DashboardLayout() {
     >
       {tabs.map(({ name, title, icon }: any) => (
         <Tabs.Screen
+          key={name}
           name={name}
           options={{
             title: title,
-            tabBarIcon: ({ color, size, focused }) => (
+            tabBarActiveTintColor: "#22C55E",
+            tabBarIcon: ({ color, size }) => (
               <MaterialIcons name={icon} color={color} size={size} />
-              // <MaterialIcons name={icon} color={focused ? "blue" : "gray"} size={size} />
             ),
           }}
         />
       ))}
+
+      {/* Hide legacy tasks tab from the bar */}
+      <Tabs.Screen
+        name="tasks"
+        options={{
+          href: null,
+          title: "Tasks",
+        }}
+      />
     </Tabs>
   );
 }
-// {/* <Tabs.Screen name="home" options={{ title: 'Home', tabBarIcon: (data) => <MaterialIcons name="home-filled" size={24} color={data.color} /> }} />
-// <Tabs.Screen name="news" options={{ title: 'News' }} />
-// <Tabs.Screen name="tasks" options={{ title: 'Tasks' }} />
-// <Tabs.Screen name="profile" options={{ title: 'Profile' }} /> */
