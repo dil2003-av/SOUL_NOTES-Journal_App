@@ -5,8 +5,8 @@ import {
   updateJournalEntry,
 } from "@/services/journalService";
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import React, { useEffect, useState } from "react";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -38,20 +38,51 @@ const JournalDetail = () => {
   const router = useRouter();
   const { showLoader, hideLoader, isLoading } = useLoader();
 
+  const scrollRef = useRef<any>(null);
+  const actionRef = useRef<any>(null);
+  const scrollYRef = useRef<number>(0);
+  const [actionY, setActionY] = useState<number>(0);
+
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
-  const [date, setDate] = useState(new Date().toISOString().split("T")[0]);
+  const [date, setDate] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+      d.getDate(),
+    ).padStart(2, "0")}`;
+  });
   const [selectedMood, setSelectedMood] = useState<string>("");
   const [isEditing, setIsEditing] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!id) {
+      // nothing to load; ensure loading is false
+      setLoading(false);
+      return;
+    }
     fetchJournal();
-  }, []);
+    // re-fetch if id changes
+  }, [id]);
+
+  // Re-fetch when screen comes into focus (e.g., after creating/updating entries)
+  useFocusEffect(
+    useCallback(() => {
+      if (id) fetchJournal();
+    }, [id]),
+  );
 
   const safeISO = (d: Date) => {
-    if (isNaN(d.getTime())) return new Date().toISOString().split("T")[0];
-    return d.toISOString().split("T")[0];
+    if (isNaN(d.getTime())) {
+      const now = new Date();
+      return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(
+        now.getDate(),
+      ).padStart(2, "0")}`;
+    }
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
   };
 
   const normalizeDate = (value?: string) => {
@@ -64,6 +95,7 @@ const JournalDetail = () => {
   const fetchJournal = async () => {
     try {
       setLoading(true);
+      if (!id) throw new Error("Missing entry id");
       const entry = await getJournalEntry(id as string);
       setTitle(entry.title);
 
@@ -207,6 +239,52 @@ const JournalDetail = () => {
     );
   };
 
+  useEffect(() => {
+    // when entering edit mode, scroll to show action buttons
+    if (isEditing) {
+      // allow layout and keyboard to settle
+      setTimeout(() => {
+        // if we can measure both action and scroll positions, compute precise offset
+        if (actionRef.current && scrollRef.current) {
+          try {
+            actionRef.current.measure(
+              (
+                ax: number,
+                ay: number,
+                aw: number,
+                ah: number,
+                apx: number,
+                apy: number,
+              ) => {
+                scrollRef.current.measure(
+                  (
+                    sx: number,
+                    sy: number,
+                    sw: number,
+                    sh: number,
+                    spx: number,
+                    spy: number,
+                  ) => {
+                    const offset = apy - spy + scrollYRef.current;
+                    // subtract some padding so buttons aren't flush to top
+                    const target = Math.max(0, offset - 80);
+                    scrollRef.current.scrollTo({ y: target, animated: true });
+                  },
+                );
+              },
+            );
+            return;
+          } catch (e) {
+            // measurement failed, fallback
+          }
+        }
+
+        // fallback
+        scrollRef.current?.scrollToEnd({ animated: true });
+      }, 450);
+    }
+  }, [isEditing]);
+
   if (loading) {
     return (
       <View className="flex-1 bg-gray-50 justify-center items-center">
@@ -263,9 +341,23 @@ const JournalDetail = () => {
         </View>
 
         <ScrollView
+          ref={(r) => {
+            scrollRef.current = r;
+          }}
           className="flex-1"
-          contentContainerStyle={{ padding: 20, paddingBottom: 40 }}
+          contentContainerStyle={{
+            padding: 20,
+            paddingBottom: 220,
+            flexGrow: 1,
+          }}
           showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="on-drag"
+          nestedScrollEnabled={true}
+          onScroll={(e) => {
+            scrollYRef.current = e.nativeEvent.contentOffset.y;
+          }}
+          scrollEventThrottle={16}
         >
           {/* Mood Display/Selector */}
           {!isEditing && selectedMood && (
@@ -366,6 +458,8 @@ const JournalDetail = () => {
               horizontal
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={{ gap: 10 }}
+              nestedScrollEnabled={true}
+              keyboardShouldPersistTaps="handled"
             >
               {weekDates.map((d) => {
                 const isActive = d.value === normalizedDate;
@@ -407,13 +501,7 @@ const JournalDetail = () => {
                 );
               })}
             </ScrollView>
-          </View>
 
-          {/* Title */}
-          <View className="mb-5">
-            <Text className="text-gray-900 font-bold mb-3 text-sm uppercase tracking-wide">
-              Title
-            </Text>
             {isEditing ? (
               <View>
                 <TextInput
@@ -507,7 +595,10 @@ const JournalDetail = () => {
           </View>
 
           {/* Action Buttons */}
-          <View className="gap-3 mt-2">
+          <View
+            className="gap-3 mt-2"
+            onLayout={(e) => setActionY(e.nativeEvent.layout.y)}
+          >
             {!isEditing ? (
               <>
                 <TouchableOpacity
