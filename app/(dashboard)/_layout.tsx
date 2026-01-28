@@ -6,7 +6,9 @@ const tabs = [
   { name: "home", title: "Home", icon: "home-filled" },
   { name: "add-entry", title: "Add", icon: "note-add" },
   { name: "journal-detail", title: "Journal", icon: "description" },
+  { name: "journal-insights", title: "Insights", icon: "insights" },
   { name: "profile", title: "Profile", icon: "person" },
+
 ] as const;
 
 export default function DashboardLayout() {
