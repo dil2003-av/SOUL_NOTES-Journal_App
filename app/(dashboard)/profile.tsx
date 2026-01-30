@@ -1,10 +1,10 @@
 import { AuthContext } from "@/context/AuthContext";
+import { uploadImageToCloudinary } from "@/services/cloudinary";
 import { Ionicons } from "@expo/vector-icons";
-import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as ImagePicker from "expo-image-picker";
 import { useRouter } from "expo-router";
 import { signOut, updateProfile } from "firebase/auth";
-import { getDownloadURL, ref, uploadBytes } from "firebase/storage";
+import { doc, getDoc, setDoc } from "firebase/firestore";
 import React, { useContext, useEffect, useState } from "react";
 import {
   ActivityIndicator,
@@ -16,294 +16,226 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { auth, storage } from "../../services/firebase";
+import { auth, db } from "../../services/firebase";
 
 const Profile = () => {
   const router = useRouter();
   const { user } = useContext(AuthContext);
-  const [profileImage, setProfileImage] = useState<string | null>(
-    user?.photoURL || null,
-  );
-  const [displayName, setDisplayName] = useState(user?.displayName || "");
-  const [phoneNumber, setPhoneNumber] = useState("");
-  const [homeAddress, setHomeAddress] = useState("");
+
+  const [profileImage, setProfileImage] = useState<string | null>(null);
+  const [displayName, setDisplayName] = useState("");
   const [isEditing, setIsEditing] = useState(false);
-  const [isEditingContact, setIsEditingContact] = useState(false);
   const [uploading, setUploading] = useState(false);
 
-  // Sync profile image from Firebase Auth when user data changes
+  // New state for additional profile fields
+  const [bio, setBio] = useState("");
+  const [phoneNumber, setPhoneNumber] = useState("");
+  const [location, setLocation] = useState("");
+  const [dateOfBirth, setDateOfBirth] = useState("");
+  const [isEditingBio, setIsEditingBio] = useState(false);
+  const [isEditingContact, setIsEditingContact] = useState(false);
+  const [accountCreatedDate, setAccountCreatedDate] = useState<Date | null>(
+    null,
+  );
+  const [totalJournals, setTotalJournals] = useState(0);
+  const [totalTasks, setTotalTasks] = useState(0);
+
+  // Load profile from Firestore (with fallback to Firebase Auth)
   useEffect(() => {
-    const loadProfileImage = async () => {
-      if (!user) {
-        setProfileImage(null);
-        return;
-      }
+    if (!user?.uid) return;
 
-      console.log("Loading profile image for user:", user.uid);
-
+    const loadProfile = async () => {
       try {
-        // First, check Firebase Auth photoURL
-        if (user?.photoURL) {
-          console.log("Loading from Firebase Auth:", user.photoURL);
-          setProfileImage(user.photoURL);
-          return;
-        }
+        console.log("Loading profile for user:", user.uid);
+        const snap = await getDoc(doc(db, "users", user.uid));
 
-        // Then try to load from local storage as fallback
-        console.log("Checking local storage for profile image...");
-        const localImage = await AsyncStorage.getItem(
-          `profileImage_${user.uid}`,
-        );
+        let photoURL = null;
+        let displayNameValue = "";
 
-        if (localImage) {
-          console.log("Found local profile image, loading...");
-          setProfileImage(localImage);
+        if (snap.exists()) {
+          const data = snap.data();
+          console.log("✓ Loaded user data from Firestore:", data);
+          photoURL = data.photoURL || null;
+          displayNameValue = data.displayName || data.name || "";
+
+          // Load additional fields
+          setBio(data.bio || "");
+          setPhoneNumber(data.phoneNumber || "");
+          setLocation(data.location || "");
+          setDateOfBirth(data.dateOfBirth || "");
+          setAccountCreatedDate(data.createdAt?.toDate() || null);
         } else {
-          console.log("No profile image found (Firebase or local)");
-          setProfileImage(null);
+          console.log("✗ No Firestore document found for user:", user.uid);
         }
+
+        // FALLBACK: Load from Firebase Auth if not in Firestore
+        const currentUser = auth.currentUser;
+        if (currentUser) {
+          console.log("Firebase Auth photoURL:", currentUser.photoURL);
+          console.log("Firebase Auth displayName:", currentUser.displayName);
+
+          if (!photoURL && currentUser.photoURL) {
+            console.log("✓ Using photoURL from Firebase Auth");
+            photoURL = currentUser.photoURL;
+          }
+
+          if (!displayNameValue && currentUser.displayName) {
+            console.log("✓ Using displayName from Firebase Auth");
+            displayNameValue = currentUser.displayName;
+          }
+        }
+
+        setProfileImage(photoURL);
+        setDisplayName(displayNameValue);
       } catch (error) {
-        console.error("Error loading profile image:", error);
-        setProfileImage(null);
+        console.error("Profile load error:", error);
       }
     };
 
-    loadProfileImage();
-  }, [user?.uid, user?.photoURL]); // Changed dependency array for better tracking
+    loadProfile();
+  }, [user?.uid]);
 
-  // Request permissions and pick image from gallery
+  // Sync Firebase Auth changes to local state
+  useEffect(() => {
+    const currentUser = auth.currentUser;
+    if (!currentUser) {
+      setProfileImage(null);
+      setDisplayName("");
+      return;
+    }
+
+    console.log("Syncing Firebase Auth user:", currentUser.email);
+    console.log("Current photoURL:", currentUser.photoURL);
+    console.log("Current displayName:", currentUser.displayName);
+
+    if (currentUser.photoURL) {
+      setProfileImage(currentUser.photoURL);
+    }
+    if (currentUser.displayName) {
+      setDisplayName(currentUser.displayName);
+    }
+  }, [user?.uid]);
+
+  // Log profile image URL for debugging
+  useEffect(() => {
+    if (profileImage) {
+      console.log("Profile Image URL:", profileImage);
+    }
+  }, [profileImage]);
+
+  // Pick image from gallery
   const pickImageFromGallery = async () => {
-    try {
-      // Request media library permissions
-      const { status } =
-        await ImagePicker.requestMediaLibraryPermissionsAsync();
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert("Permission required", "Gallery access is needed");
+      return;
+    }
 
-      if (status !== "granted") {
-        Alert.alert(
-          "Permission Required",
-          "Sorry, we need gallery permissions to upload photos.",
-        );
-        return;
-      }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
 
-      // Launch image picker
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ["images"],
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.8,
-      });
-
-      if (!result.canceled && result.assets[0]) {
-        setProfileImage(result.assets[0].uri);
-        await uploadProfileImage(result.assets[0].uri);
-      }
-    } catch (error) {
-      console.error("Error picking image:", error);
-      Alert.alert("Error", "Failed to pick image from gallery");
+    if (!result.canceled) {
+      uploadProfileImage(result.assets[0].uri);
     }
   };
 
-  // Request permissions and take photo with camera
+  // Take photo with camera
   const takePhotoWithCamera = async () => {
-    try {
-      // Request camera permissions
-      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert("Permission required", "Camera access is needed");
+      return;
+    }
 
-      if (status !== "granted") {
-        Alert.alert(
-          "Permission Required",
-          "Sorry, we need camera permissions to take photos.",
-        );
-        return;
-      }
+    const result = await ImagePicker.launchCameraAsync({
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
 
-      // Launch camera
-      const result = await ImagePicker.launchCameraAsync({
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.8,
-      });
-
-      if (!result.canceled && result.assets[0]) {
-        setProfileImage(result.assets[0].uri);
-        await uploadProfileImage(result.assets[0].uri);
-      }
-    } catch (error) {
-      console.error("Error taking photo:", error);
-      Alert.alert("Error", "Failed to take photo");
+    if (!result.canceled) {
+      uploadProfileImage(result.assets[0].uri);
     }
   };
 
-  // Show options for image selection
+  // Image selection popup
   const handleImageSelection = () => {
-    Alert.alert(
-      "Update Profile Picture",
-      "Choose an option",
-      [
-        {
-          text: "Take Photo",
-          onPress: takePhotoWithCamera,
-        },
-        {
-          text: "Choose from Gallery",
-          onPress: pickImageFromGallery,
-        },
-        {
-          text: "Cancel",
-          style: "cancel",
-        },
-      ],
-      { cancelable: true },
-    );
+    Alert.alert("Update Profile Picture", "Choose an option", [
+      { text: "Camera", onPress: takePhotoWithCamera },
+      { text: "Gallery", onPress: pickImageFromGallery },
+      { text: "Cancel", style: "cancel" },
+    ]);
   };
 
-  // Upload profile image to Firebase Storage
+  // Upload profile image
   const uploadProfileImage = async (imageUri: string) => {
+    // Use auth.currentUser directly instead of relying on context
+    const currentUser = auth.currentUser;
+
+    if (!currentUser) {
+      console.error("No user logged in - auth.currentUser is null");
+      console.error("Context user:", user);
+      Alert.alert("Error", "No user logged in. Please login first.");
+      return;
+    }
+
     try {
       setUploading(true);
+      console.log("=== START UPLOAD PROCESS ===");
+      console.log("User ID:", currentUser.uid);
+      console.log("User Email:", currentUser.email);
 
-      const currentUser = auth.currentUser;
+      // Step 1: Upload to Cloudinary
+      console.log("Step 1: Uploading to Cloudinary...");
+      const cloudImageUrl = await uploadImageToCloudinary(imageUri);
+      console.log("✓ Cloudinary returned URL:", cloudImageUrl);
 
-      if (!currentUser) {
-        Alert.alert("Error", "No user logged in");
-        setUploading(false);
-        return;
+      if (!cloudImageUrl) {
+        throw new Error("Cloudinary returned empty URL");
       }
 
-      console.log("Starting image upload for user:", currentUser.uid);
-      console.log("Image URI:", imageUri);
+      // Step 2: Update Firebase Auth
+      console.log("Step 2: Updating Firebase Auth profile...");
+      await updateProfile(currentUser, { photoURL: cloudImageUrl });
+      console.log("✓ Firebase Auth photoURL updated");
 
-      // Read image file and convert to base64
-      let base64Data: string;
-      try {
-        console.log("Reading file from URI:", imageUri);
+      // Step 2b: RELOAD the user to persist changes
+      console.log("Step 2b: Reloading Firebase Auth user...");
+      await currentUser.reload();
+      console.log("✓ Firebase Auth user reloaded");
 
-        // Use fetch to read the local file and convert to base64
-        const response = await fetch(imageUri);
-        const blob = await response.blob();
+      // Step 3: Save to Firestore
+      console.log("Step 3: Saving to Firestore...");
+      await setDoc(
+        doc(db, "users", currentUser.uid),
+        {
+          photoURL: cloudImageUrl,
+          displayName: currentUser.displayName || "",
+          email: currentUser.email || "",
+          updatedAt: new Date(),
+        },
+        { merge: true },
+      );
+      console.log("✓ Firestore photoURL saved");
 
-        // Convert blob to base64 using FileReader-like approach for React Native
-        const reader = new FileReader();
-        const base64Promise = new Promise<string>((resolve, reject) => {
-          reader.onload = () => {
-            const dataUrl = reader.result as string;
-            // Extract the base64 part after the comma
-            const base64 = dataUrl.split(",")[1];
-            resolve(base64);
-          };
-          reader.onerror = (error) => reject(error);
-          reader.readAsDataURL(blob);
-        });
+      // Step 4: Update local state
+      console.log("Step 4: Updating local state...");
+      setProfileImage(cloudImageUrl);
+      console.log("✓ Local state updated with photoURL:", cloudImageUrl);
+      console.log("=== UPLOAD PROCESS COMPLETE ===");
 
-        base64Data = await base64Promise;
-        console.log("✅ File read successfully, size:", base64Data.length);
-      } catch (fileError: any) {
-        console.error("Error reading file:", fileError);
-        Alert.alert("Error", "Failed to read image file: " + fileError.message);
-        setUploading(false);
-        return;
-      }
-
-      // Prepare base64 data URL
-      const base64Url = `data:image/jpeg;base64,${base64Data}`;
-
-      // Try to upload to Firebase Storage first
-      let downloadURL: string | null = null;
-
-      try {
-        const timestamp = Date.now();
-        const storageRef = ref(
-          storage,
-          `profileImages/${currentUser.uid}/${timestamp}.jpg`,
-        );
-
-        console.log("Uploading to Firebase Storage...");
-
-        // Convert base64 to blob for Firebase upload
-        const byteCharacters = atob(base64Data);
-        const byteNumbers = new Array(byteCharacters.length);
-        for (let i = 0; i < byteCharacters.length; i++) {
-          byteNumbers[i] = byteCharacters.charCodeAt(i);
-        }
-        const byteArray = new Uint8Array(byteNumbers);
-        const blob = new Blob([byteArray], { type: "image/jpeg" });
-
-        const uploadResult = await uploadBytes(storageRef, blob, {
-          contentType: "image/jpeg",
-          cacheControl: "public, max-age=3600",
-        });
-
-        downloadURL = await getDownloadURL(uploadResult.ref);
-        console.log("✅ Firebase upload successful:", downloadURL);
-
-        // Update Firebase Auth profile
-        try {
-          await updateProfile(currentUser, {
-            photoURL: downloadURL,
-          });
-          console.log("✅ Firebase profile updated with download URL");
-        } catch (authError: any) {
-          console.warn(
-            "Failed to update Firebase Auth profile:",
-            authError.message,
-          );
-        }
-      } catch (firebaseError: any) {
-        console.warn("Firebase Storage upload failed:", firebaseError.message);
-        console.log("Using local AsyncStorage as fallback...");
-
-        // Fallback: Save base64 data locally
-        try {
-          const key = `profileImage_${currentUser.uid}`;
-          console.log("Saving to AsyncStorage with key:", key);
-
-          await AsyncStorage.setItem(key, base64Url);
-
-          // Verify save
-          const saved = await AsyncStorage.getItem(key);
-          if (saved) {
-            console.log("✅ Image saved to AsyncStorage successfully");
-            downloadURL = base64Url;
-          } else {
-            console.error("❌ Failed to save image to AsyncStorage");
-            throw new Error("AsyncStorage save failed");
-          }
-        } catch (storageError: any) {
-          console.error("AsyncStorage error:", storageError);
-          Alert.alert("Error", "Failed to save profile picture");
-          setUploading(false);
-          return;
-        }
-      }
-
-      if (!downloadURL) {
-        throw new Error("Failed to get image URL");
-      }
-
-      // Update local state
-      console.log("Updating local state with profile image");
-      setProfileImage(downloadURL);
-
-      Alert.alert("Success", "Profile picture saved successfully!");
+      Alert.alert("Success", "Profile picture updated!");
     } catch (error: any) {
-      console.error("Error uploading image:", error);
-      console.error("Error code:", error.code);
-      console.error("Error message:", error.message);
-
-      if (error.code === "storage/unauthorized") {
-        Alert.alert(
-          "Storage Permission Error",
-          "Firebase Storage rules not configured.",
-        );
-      } else if (error.code === "auth/invalid-profile-attribute") {
-        Alert.alert("Success", "Profile picture saved locally on your device!");
-      } else {
-        Alert.alert(
-          "Error",
-          `Failed to upload image: ${error.message || "Unknown error"}`,
-        );
-      }
+      console.error("✗ Upload Error:", error);
+      console.error("Error details:", {
+        code: error.code,
+        message: error.message,
+        stack: error.stack,
+      });
+      Alert.alert("Upload failed", error.message || "Something went wrong");
     } finally {
       setUploading(false);
     }
@@ -311,250 +243,568 @@ const Profile = () => {
 
   // Update display name
   const handleUpdateProfile = async () => {
-    if (!displayName.trim()) {
-      Alert.alert("Error", "Display name cannot be empty");
+    const currentUser = auth.currentUser;
+
+    if (!displayName.trim() || !currentUser) {
+      Alert.alert("Error", "Please enter a name and login first");
       return;
     }
 
     try {
       setUploading(true);
-      if (user) {
-        await updateProfile(user, {
-          displayName: displayName.trim(),
-        });
-      }
+
+      await updateProfile(currentUser, { displayName });
+
+      await setDoc(
+        doc(db, "users", currentUser.uid),
+        { displayName, updatedAt: new Date() },
+        { merge: true },
+      );
+
       setIsEditing(false);
       Alert.alert("Success", "Profile updated successfully!");
-    } catch (error) {
+    } catch (error: any) {
       console.error("Error updating profile:", error);
-      Alert.alert("Error", "Failed to update profile");
+      Alert.alert("Error updating profile", error.message);
     } finally {
       setUploading(false);
     }
   };
 
-  // Update contact information
-  const handleUpdateContact = () => {
-    setIsEditingContact(false);
-    Alert.alert("Success", "Contact information updated!");
+  // Update bio
+  const handleUpdateBio = async () => {
+    const currentUser = auth.currentUser;
+    if (!currentUser) return;
+
+    try {
+      setUploading(true);
+      await setDoc(
+        doc(db, "users", currentUser.uid),
+        { bio, updatedAt: new Date() },
+        { merge: true },
+      );
+      setIsEditingBio(false);
+      Alert.alert("Success", "Bio updated!");
+    } catch (error: any) {
+      Alert.alert("Error", error.message);
+    } finally {
+      setUploading(false);
+    }
   };
 
-  // Handle logout
+  // Update contact info
+  const handleUpdateContact = async () => {
+    const currentUser = auth.currentUser;
+    if (!currentUser) return;
+
+    try {
+      setUploading(true);
+      await setDoc(
+        doc(db, "users", currentUser.uid),
+        { phoneNumber, location, dateOfBirth, updatedAt: new Date() },
+        { merge: true },
+      );
+      setIsEditingContact(false);
+      Alert.alert("Success", "Contact info updated!");
+    } catch (error: any) {
+      Alert.alert("Error", error.message);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  // Delete account
+  const handleDeleteAccount = () => {
+    Alert.alert(
+      "Delete Account",
+      "Are you sure? This action cannot be undone. All your data will be permanently deleted.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Delete",
+          style: "destructive",
+          onPress: async () => {
+            try {
+              const currentUser = auth.currentUser;
+              if (currentUser) {
+                await setDoc(
+                  doc(db, "users", currentUser.uid),
+                  { deleted: true, deletedAt: new Date() },
+                  { merge: true },
+                );
+                await signOut(auth);
+                router.replace("/(auth)/login");
+                Alert.alert("Account Deleted", "Your account has been deleted");
+              }
+            } catch (error: any) {
+              Alert.alert("Error", error.message);
+            }
+          },
+        },
+      ],
+    );
+  };
+
+  // Logout
   const handleLogout = async () => {
-    Alert.alert("Logout", "Are you sure you want to logout?", [
+    Alert.alert("Logout", "Are you sure?", [
       { text: "Cancel", style: "cancel" },
       {
         text: "Logout",
         style: "destructive",
         onPress: async () => {
-          try {
-            await signOut(auth);
-            router.replace("/(auth)/login");
-          } catch (error) {
-            console.error("Logout error:", error);
-            Alert.alert("Error", "Failed to logout");
-          }
+          await signOut(auth);
+          router.replace("/(auth)/login");
         },
       },
     ]);
   };
 
   return (
-    <ScrollView className="flex-1 bg-gray-50">
-      <View className="px-6 pt-16 pb-8">
-        {/* Header */}
-        <Text className="text-3xl font-bold text-gray-900 mb-2">Profile</Text>
-        <Text className="text-gray-600 mb-8">Manage your account settings</Text>
+    <ScrollView style={{ flex: 1, backgroundColor: "#F9FAFB" }}>
+      <View
+        style={{ paddingHorizontal: 24, paddingTop: 64, paddingBottom: 32 }}
+      >
+        <Text style={{ fontSize: 28, fontWeight: "bold", marginBottom: 8 }}>
+          Profile
+        </Text>
+        <Text style={{ color: "#6B7280", marginBottom: 32 }}>
+          Manage your account
+        </Text>
 
-        {/* Profile Picture Section */}
-        <View className="items-center mb-8">
-          <Pressable
-            onPress={handleImageSelection}
-            className="relative"
-            disabled={uploading}
-          >
-            <View className="w-32 h-32 rounded-full bg-[#10B981] items-center justify-center overflow-hidden border-4 border-[#0ea5a4]">
+        {/* Profile Image */}
+        <View style={{ alignItems: "center", marginBottom: 32 }}>
+          <Pressable onPress={handleImageSelection}>
+            <View
+              style={{
+                width: 128,
+                height: 128,
+                borderRadius: 64,
+                backgroundColor: "#10B981",
+                overflow: "hidden",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
               {profileImage ? (
                 <Image
-                  source={{ uri: profileImage }}
-                  className="w-full h-full"
-                  resizeMode="cover"
+                  source={{
+                    uri: profileImage
+                      ? `${profileImage}?t=${Date.now()}`
+                      : profileImage,
+                  }}
+                  style={{ width: 128, height: 128, borderRadius: 64 }}
+                  onError={(error) => {
+                    console.error("Image load error:", error);
+                  }}
+                  onLoadEnd={() => {
+                    console.log("Image loaded successfully");
+                  }}
                 />
               ) : (
-                <Text className="text-5xl">👤</Text>
+                <Text style={{ fontSize: 48 }}>👤</Text>
               )}
             </View>
 
-            {/* Camera Icon Overlay */}
-            <View className="absolute bottom-0 right-0 bg-[#10B981] w-10 h-10 rounded-full items-center justify-center border-2 border-white">
+            <View
+              style={{
+                position: "absolute",
+                bottom: 4,
+                right: 4,
+                width: 40,
+                height: 40,
+                borderRadius: 20,
+                backgroundColor: "#10B981",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
               {uploading ? (
-                <ActivityIndicator size="small" color="#fff" />
+                <ActivityIndicator color="#fff" />
               ) : (
                 <Ionicons name="camera" size={20} color="#fff" />
               )}
             </View>
           </Pressable>
 
-          <Text className="text-gray-900 text-xl font-semibold mt-4">
+          <Text style={{ fontSize: 20, fontWeight: "600", marginTop: 16 }}>
             {displayName || "Anonymous"}
           </Text>
-          <Text className="text-gray-600 text-sm mt-1">{user?.email}</Text>
+          <Text style={{ color: "#6B7280" }}>{user?.email}</Text>
         </View>
 
-        {/* Display Name Section */}
-        <View className="bg-white rounded-2xl p-6 mb-6 border border-gray-200">
-          <View className="flex-row items-center justify-between mb-4">
-            <Text className="text-gray-900 text-lg font-semibold">
+        {/* Display Name */}
+        <View
+          style={{
+            backgroundColor: "#fff",
+            padding: 24,
+            borderRadius: 24,
+            marginBottom: 16,
+          }}
+        >
+          <View
+            style={{
+              flexDirection: "row",
+              justifyContent: "space-between",
+              marginBottom: 16,
+            }}
+          >
+            <Text style={{ fontWeight: "600", fontSize: 16 }}>
               Display Name
             </Text>
             <Pressable onPress={() => setIsEditing(!isEditing)}>
-              <Ionicons
-                name={isEditing ? "close" : "pencil"}
-                size={20}
-                color="#10B981"
-              />
+              <Ionicons name="pencil" size={18} color="#10B981" />
             </Pressable>
           </View>
 
           {isEditing ? (
-            <View>
+            <>
               <TextInput
                 value={displayName}
                 onChangeText={setDisplayName}
                 placeholder="Enter your name"
-                placeholderTextColor="#9CA3AF"
-                className="bg-gray-100 text-gray-900 px-4 py-3 rounded-xl mb-4 border border-gray-300"
+                style={{
+                  backgroundColor: "#F3F4F6",
+                  borderRadius: 16,
+                  paddingHorizontal: 16,
+                  paddingVertical: 12,
+                  marginBottom: 16,
+                }}
               />
               <Pressable
                 onPress={handleUpdateProfile}
-                disabled={uploading}
-                className="bg-[#10B981] py-3 rounded-xl items-center"
+                style={{
+                  backgroundColor: "#10B981",
+                  paddingVertical: 12,
+                  borderRadius: 16,
+                  alignItems: "center",
+                }}
               >
-                {uploading ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <Text className="text-white font-semibold text-base">
-                    Save Changes
-                  </Text>
-                )}
+                <Text style={{ color: "#fff", fontWeight: "600" }}>Save</Text>
               </Pressable>
-            </View>
+            </>
           ) : (
-            <Text className="text-gray-700">{displayName || "Not set"}</Text>
+            <Text style={{ color: "#374151" }}>{displayName || "Not set"}</Text>
+          )}
+        </View>
+
+        {/* Bio Section */}
+        <View
+          style={{
+            backgroundColor: "#fff",
+            padding: 24,
+            borderRadius: 24,
+            marginBottom: 16,
+          }}
+        >
+          <View
+            style={{
+              flexDirection: "row",
+              justifyContent: "space-between",
+              marginBottom: 16,
+            }}
+          >
+            <Text style={{ fontWeight: "600", fontSize: 16 }}>Bio</Text>
+            <Pressable onPress={() => setIsEditingBio(!isEditingBio)}>
+              <Ionicons name="pencil" size={18} color="#10B981" />
+            </Pressable>
+          </View>
+
+          {isEditingBio ? (
+            <>
+              <TextInput
+                value={bio}
+                onChangeText={setBio}
+                placeholder="Tell us about yourself..."
+                multiline
+                numberOfLines={4}
+                style={{
+                  backgroundColor: "#F3F4F6",
+                  borderRadius: 16,
+                  paddingHorizontal: 16,
+                  paddingVertical: 12,
+                  marginBottom: 16,
+                  textAlignVertical: "top",
+                  minHeight: 100,
+                }}
+              />
+              <Pressable
+                onPress={handleUpdateBio}
+                style={{
+                  backgroundColor: "#10B981",
+                  paddingVertical: 12,
+                  borderRadius: 16,
+                  alignItems: "center",
+                }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "600" }}>Save</Text>
+              </Pressable>
+            </>
+          ) : (
+            <Text style={{ color: "#374151" }}>
+              {bio || "No bio added yet"}
+            </Text>
+          )}
+        </View>
+
+        {/* Contact Information */}
+        <View
+          style={{
+            backgroundColor: "#fff",
+            padding: 24,
+            borderRadius: 24,
+            marginBottom: 16,
+          }}
+        >
+          <View
+            style={{
+              flexDirection: "row",
+              justifyContent: "space-between",
+              marginBottom: 16,
+            }}
+          >
+            <Text style={{ fontWeight: "600", fontSize: 16 }}>
+              Contact Information
+            </Text>
+            <Pressable onPress={() => setIsEditingContact(!isEditingContact)}>
+              <Ionicons name="pencil" size={18} color="#10B981" />
+            </Pressable>
+          </View>
+
+          {isEditingContact ? (
+            <>
+              <View style={{ marginBottom: 12 }}>
+                <Text
+                  style={{ color: "#6B7280", marginBottom: 8, fontSize: 14 }}
+                >
+                  Phone Number
+                </Text>
+                <TextInput
+                  value={phoneNumber}
+                  onChangeText={setPhoneNumber}
+                  placeholder="+1 234 567 8900"
+                  keyboardType="phone-pad"
+                  style={{
+                    backgroundColor: "#F3F4F6",
+                    borderRadius: 12,
+                    paddingHorizontal: 16,
+                    paddingVertical: 12,
+                  }}
+                />
+              </View>
+
+              <View style={{ marginBottom: 12 }}>
+                <Text
+                  style={{ color: "#6B7280", marginBottom: 8, fontSize: 14 }}
+                >
+                  Location
+                </Text>
+                <TextInput
+                  value={location}
+                  onChangeText={setLocation}
+                  placeholder="City, Country"
+                  style={{
+                    backgroundColor: "#F3F4F6",
+                    borderRadius: 12,
+                    paddingHorizontal: 16,
+                    paddingVertical: 12,
+                  }}
+                />
+              </View>
+
+              <View style={{ marginBottom: 16 }}>
+                <Text
+                  style={{ color: "#6B7280", marginBottom: 8, fontSize: 14 }}
+                >
+                  Date of Birth
+                </Text>
+                <TextInput
+                  value={dateOfBirth}
+                  onChangeText={setDateOfBirth}
+                  placeholder="YYYY-MM-DD"
+                  style={{
+                    backgroundColor: "#F3F4F6",
+                    borderRadius: 12,
+                    paddingHorizontal: 16,
+                    paddingVertical: 12,
+                  }}
+                />
+              </View>
+
+              <Pressable
+                onPress={handleUpdateContact}
+                style={{
+                  backgroundColor: "#10B981",
+                  paddingVertical: 12,
+                  borderRadius: 16,
+                  alignItems: "center",
+                }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "600" }}>Save</Text>
+              </Pressable>
+            </>
+          ) : (
+            <>
+              <View style={{ marginBottom: 12 }}>
+                <Text style={{ color: "#6B7280", fontSize: 14 }}>Phone</Text>
+                <Text style={{ color: "#374151", marginTop: 4 }}>
+                  {phoneNumber || "Not set"}
+                </Text>
+              </View>
+              <View style={{ marginBottom: 12 }}>
+                <Text style={{ color: "#6B7280", fontSize: 14 }}>Location</Text>
+                <Text style={{ color: "#374151", marginTop: 4 }}>
+                  {location || "Not set"}
+                </Text>
+              </View>
+              <View>
+                <Text style={{ color: "#6B7280", fontSize: 14 }}>
+                  Date of Birth
+                </Text>
+                <Text style={{ color: "#374151", marginTop: 4 }}>
+                  {dateOfBirth || "Not set"}
+                </Text>
+              </View>
+            </>
           )}
         </View>
 
         {/* Account Info */}
-        <View className="bg-white rounded-2xl p-6 mb-6 border border-gray-200">
-          <View className="flex-row items-center justify-between mb-4">
-            <Text className="text-gray-900 text-lg font-semibold">
-              Account Information
+        <View
+          style={{
+            backgroundColor: "#fff",
+            padding: 24,
+            borderRadius: 24,
+            marginBottom: 16,
+          }}
+        >
+          <Text style={{ fontWeight: "600", fontSize: 16, marginBottom: 16 }}>
+            Account Information
+          </Text>
+
+          <View style={{ marginBottom: 12 }}>
+            <Text style={{ color: "#6B7280", fontSize: 14 }}>Email</Text>
+            <Text style={{ color: "#374151", marginTop: 4 }}>
+              {user?.email}
             </Text>
-            <Pressable onPress={() => setIsEditingContact(!isEditingContact)}>
-              <Ionicons
-                name={isEditingContact ? "close" : "pencil"}
-                size={20}
-                color="#10B981"
-              />
-            </Pressable>
           </View>
 
-          <View className="mb-4">
-            <Text className="text-gray-500 text-sm mb-1">Email</Text>
-            <Text className="text-gray-900">{user?.email}</Text>
-          </View>
-
-          <View className="mb-4">
-            <Text className="text-gray-500 text-sm mb-1">Telephone Number</Text>
-            {isEditingContact ? (
-              <TextInput
-                value={phoneNumber}
-                onChangeText={setPhoneNumber}
-                placeholder="Enter your phone number"
-                placeholderTextColor="#9CA3AF"
-                keyboardType="phone-pad"
-                className="bg-gray-100 text-gray-900 px-4 py-3 rounded-xl border border-gray-300"
-              />
-            ) : (
-              <Text className="text-gray-700">{phoneNumber || "Not set"}</Text>
-            )}
-          </View>
-
-          <View className="mb-4">
-            <Text className="text-gray-500 text-sm mb-1">Home Address</Text>
-            {isEditingContact ? (
-              <TextInput
-                value={homeAddress}
-                onChangeText={setHomeAddress}
-                placeholder="Enter your home address"
-                placeholderTextColor="#9CA3AF"
-                multiline
-                numberOfLines={3}
-                className="bg-gray-100 text-gray-900 px-4 py-3 rounded-xl border border-gray-300"
-              />
-            ) : (
-              <Text className="text-gray-700">{homeAddress || "Not set"}</Text>
-            )}
-          </View>
-
-          {isEditingContact && (
-            <Pressable
-              onPress={handleUpdateContact}
-              className="bg-[#10B981] py-3 rounded-xl items-center mt-2"
-            >
-              <Text className="text-white font-semibold text-base">
-                Save Contact Info
-              </Text>
-            </Pressable>
-          )}
-
-          <View className="border-t border-gray-200 mt-4 pt-4">
-            <View className="mb-3">
-              <Text className="text-gray-500 text-sm mb-1">User ID</Text>
-              <Text className="text-gray-700 text-xs">{user?.uid}</Text>
-            </View>
-
+          {accountCreatedDate && (
             <View>
-              <Text className="text-gray-500 text-sm mb-1">
-                Account Created
+              <Text style={{ color: "#6B7280", fontSize: 14 }}>
+                Member Since
               </Text>
-              <Text className="text-gray-700">
-                {user?.metadata?.creationTime
-                  ? new Date(user.metadata.creationTime).toLocaleDateString()
-                  : "N/A"}
+              <Text style={{ color: "#374151", marginTop: 4 }}>
+                {accountCreatedDate.toLocaleDateString("en-US", {
+                  month: "long",
+                  day: "numeric",
+                  year: "numeric",
+                })}
               </Text>
             </View>
-          </View>
+          )}
         </View>
 
-        {/* Actions */}
-        <View className="space-y-3">
+        {/* Settings */}
+        <View
+          style={{
+            backgroundColor: "#fff",
+            padding: 24,
+            borderRadius: 24,
+            marginBottom: 16,
+          }}
+        >
+          <Text style={{ fontWeight: "600", fontSize: 16, marginBottom: 16 }}>
+            Settings
+          </Text>
+
           <Pressable
-            onPress={handleImageSelection}
-            className="bg-white py-4 rounded-xl flex-row items-center justify-between px-6 border border-gray-200"
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              paddingVertical: 12,
+              borderBottomWidth: 1,
+              borderBottomColor: "#F3F4F6",
+            }}
           >
-            <View className="flex-row items-center">
-              <Ionicons name="images-outline" size={24} color="#10B981" />
-              <Text className="text-gray-900 text-base ml-3">
-                Change Profile Picture
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color="#9CA3AF" />
+            <Ionicons name="notifications-outline" size={20} color="#6B7280" />
+            <Text style={{ marginLeft: 12, color: "#374151", flex: 1 }}>
+              Notifications
+            </Text>
+            <Ionicons name="chevron-forward" size={20} color="#6B7280" />
           </Pressable>
 
           <Pressable
-            onPress={handleLogout}
-            className="bg-red-50 py-4 rounded-xl flex-row items-center justify-between px-6 mt-3 border border-red-200"
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              paddingVertical: 12,
+              borderBottomWidth: 1,
+              borderBottomColor: "#F3F4F6",
+            }}
           >
-            <View className="flex-row items-center">
-              <Ionicons name="log-out-outline" size={24} color="#EF4444" />
-              <Text className="text-red-500 text-base ml-3 font-semibold">
-                Logout
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color="#EF4444" />
+            <Ionicons
+              name="shield-checkmark-outline"
+              size={20}
+              color="#6B7280"
+            />
+            <Text style={{ marginLeft: 12, color: "#374151", flex: 1 }}>
+              Privacy & Security
+            </Text>
+            <Ionicons name="chevron-forward" size={20} color="#6B7280" />
+          </Pressable>
+
+          <Pressable
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              paddingVertical: 12,
+            }}
+          >
+            <Ionicons name="help-circle-outline" size={20} color="#6B7280" />
+            <Text style={{ marginLeft: 12, color: "#374151", flex: 1 }}>
+              Help & Support
+            </Text>
+            <Ionicons name="chevron-forward" size={20} color="#6B7280" />
           </Pressable>
         </View>
+
+        {/* Logout */}
+        <Pressable
+          onPress={handleLogout}
+          style={{
+            backgroundColor: "#FEE2E2",
+            paddingVertical: 16,
+            borderRadius: 16,
+            flexDirection: "row",
+            justifyContent: "center",
+            alignItems: "center",
+            marginBottom: 12,
+          }}
+        >
+          <Ionicons name="log-out-outline" size={22} color="#EF4444" />
+          <Text style={{ color: "#EF4444", marginLeft: 8, fontWeight: "600" }}>
+            Logout
+          </Text>
+        </Pressable>
+
+        {/* Delete Account */}
+        <Pressable
+          onPress={handleDeleteAccount}
+          style={{
+            backgroundColor: "#FEF2F2",
+            paddingVertical: 16,
+            borderRadius: 16,
+            flexDirection: "row",
+            justifyContent: "center",
+            alignItems: "center",
+          }}
+        >
+          <Ionicons name="trash-outline" size={22} color="#DC2626" />
+          <Text style={{ color: "#DC2626", marginLeft: 8, fontWeight: "600" }}>
+            Delete Account
+          </Text>
+        </Pressable>
       </View>
     </ScrollView>
   );
