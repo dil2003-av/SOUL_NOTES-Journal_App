@@ -5,11 +5,15 @@ import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect, useRouter } from "expo-router";
 import { signOut, updateProfile } from "firebase/auth";
 import {
+  collection,
   doc,
   getDoc,
+  getDocs,
   onSnapshot,
+  query,
   serverTimestamp,
   setDoc,
+  where,
 } from "firebase/firestore";
 import React, { useCallback, useContext, useEffect, useState } from "react";
 import {
@@ -54,90 +58,135 @@ const Profile = () => {
   const [soundEnabled, setSoundEnabled] = useState(true);
 
   const loadProfile = useCallback(async () => {
-    if (!user?.uid) return;
+    const currentUser = auth.currentUser;
+
+    if (!currentUser?.uid) {
+      console.log("❌ No user logged in - waiting for auth...");
+      return;
+    }
 
     try {
-      console.log("Loading profile for user:", user.uid);
-      let snap = await getDoc(doc(db, "users", user.uid));
+      console.log("=== LOADING PROFILE ===");
+      console.log("User UID:", currentUser.uid);
+      console.log("User Email:", currentUser.email);
 
-      let photoURL = null;
-      let displayNameValue = "";
+      // First, try to load from users/{uid}
+      let snap = await getDoc(doc(db, "users", currentUser.uid));
 
       if (snap.exists()) {
         const data = snap.data();
-        console.log("✓ Loaded user data from Firestore:", data);
-        photoURL = data.photoURL || null;
-        displayNameValue = data.displayName || data.name || "";
+        console.log("✅ Found document at users/" + currentUser.uid);
+        console.log("Document data:", JSON.stringify(data, null, 2));
 
-        // Load additional fields
+        // Load all data from the document
+        setProfileImage(data.photoURL || null);
+        setDisplayName(data.displayName || data.name || "");
         setBio(data.bio || "");
         setPhoneNumber(data.phoneNumber || "");
         setLocation(data.location || "");
         setDateOfBirth(data.dateOfBirth || "");
         setAccountCreatedDate(data.createdAt?.toDate() || null);
 
-        // Load settings
-        setNotificationsEnabled(data.notificationsEnabled ?? true);
-        setRemindersEnabled(data.remindersEnabled ?? true);
-        setDarkModeEnabled(data.darkModeEnabled ?? false);
-        setSoundEnabled(data.soundEnabled ?? true);
-      } else {
-        console.log("✗ No Firestore document found for user:", user.uid);
+        const settings = (data.settings as Record<string, any>) || {};
+        setNotificationsEnabled(
+          settings.notifications ?? data.notificationsEnabled ?? true,
+        );
+        setRemindersEnabled(
+          settings.dailyReminder ?? data.remindersEnabled ?? true,
+        );
+        setDarkModeEnabled(settings.darkMode ?? data.darkModeEnabled ?? false);
+        setSoundEnabled(settings.soundEnabled ?? data.soundEnabled ?? true);
 
-        const currentUser = auth.currentUser;
-        if (currentUser) {
+        console.log("✅ Profile loaded successfully");
+        return;
+      }
+
+      // Document doesn't exist at users/{uid}, try email-based lookup
+      console.log("⚠️ No document at users/" + currentUser.uid);
+
+      if (currentUser.email) {
+        console.log("🔍 Searching for user by email:", currentUser.email);
+
+        const usersRef = collection(db, "users");
+        const q = query(usersRef, where("email", "==", currentUser.email));
+        const emailSnap = await getDocs(q);
+
+        console.log("📧 Email query returned", emailSnap.size, "documents");
+
+        if (!emailSnap.empty) {
+          const emailDoc = emailSnap.docs[0];
+          const foundDocId = emailDoc.id;
+          const data = emailDoc.data();
+
+          console.log("✅ Found user document by email!");
+          console.log("Document ID:", foundDocId);
+          console.log("Document data:", JSON.stringify(data, null, 2));
+
+          // Migrate data to users/{uid}
+          console.log("📦 Migrating data to users/" + currentUser.uid);
           await setDoc(
             doc(db, "users", currentUser.uid),
             {
-              displayName: currentUser.displayName || "",
-              email: currentUser.email || "",
-              createdAt: serverTimestamp(),
+              ...data,
+              email: currentUser.email,
               updatedAt: serverTimestamp(),
             },
             { merge: true },
           );
 
-          snap = await getDoc(doc(db, "users", currentUser.uid));
-          if (snap.exists()) {
-            const data = snap.data();
-            photoURL = data.photoURL || null;
-            displayNameValue = data.displayName || data.name || "";
+          console.log("✅ Migration complete!");
 
-            setBio(data.bio || "");
-            setPhoneNumber(data.phoneNumber || "");
-            setLocation(data.location || "");
-            setDateOfBirth(data.dateOfBirth || "");
-            setAccountCreatedDate(data.createdAt?.toDate() || null);
+          // Load the migrated data
+          setProfileImage(data.photoURL || null);
+          setDisplayName(data.displayName || data.name || "");
+          setBio(data.bio || "");
+          setPhoneNumber(data.phoneNumber || "");
+          setLocation(data.location || "");
+          setDateOfBirth(data.dateOfBirth || "");
+          setAccountCreatedDate(data.createdAt?.toDate() || null);
 
-            setNotificationsEnabled(data.notificationsEnabled ?? true);
-            setRemindersEnabled(data.remindersEnabled ?? true);
-            setDarkModeEnabled(data.darkModeEnabled ?? false);
-            setSoundEnabled(data.soundEnabled ?? true);
-          }
+          const settings = (data.settings as Record<string, any>) || {};
+          setNotificationsEnabled(
+            settings.notifications ?? data.notificationsEnabled ?? true,
+          );
+          setRemindersEnabled(
+            settings.dailyReminder ?? data.remindersEnabled ?? true,
+          );
+          setDarkModeEnabled(
+            settings.darkMode ?? data.darkModeEnabled ?? false,
+          );
+          setSoundEnabled(settings.soundEnabled ?? data.soundEnabled ?? true);
+
+          console.log("✅ Profile loaded from migrated data");
+          return;
         }
+
+        console.log("⚠️ No documents found by email query");
       }
 
-      // FALLBACK: Load from Firebase Auth if not in Firestore
-      const currentUser = auth.currentUser;
-      if (currentUser) {
-        console.log("Firebase Auth photoURL:", currentUser.photoURL);
-        console.log("Firebase Auth displayName:", currentUser.displayName);
+      // No existing data found, create new user document
+      console.log("📝 Creating new user document");
+      await setDoc(
+        doc(db, "users", currentUser!.uid),
+        {
+          displayName: currentUser?.displayName || "",
+          email: currentUser?.email || "",
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        },
+        { merge: true },
+      );
 
-        if (!photoURL && currentUser.photoURL) {
-          console.log("✓ Using photoURL from Firebase Auth");
-          photoURL = currentUser.photoURL;
-        }
-
-        if (!displayNameValue && currentUser.displayName) {
-          console.log("✓ Using displayName from Firebase Auth");
-          displayNameValue = currentUser.displayName;
-        }
-      }
-
-      setProfileImage(photoURL);
-      setDisplayName(displayNameValue);
+      // Load from Firebase Auth
+      setProfileImage(currentUser?.photoURL || null);
+      setDisplayName(currentUser?.displayName || "");
+      console.log("✅ New user document created");
     } catch (error) {
-      console.error("Profile load error:", error);
+      console.error("❌ Profile load error:", error);
+      Alert.alert(
+        "Error",
+        "Failed to load profile. Check console for details.",
+      );
     }
   }, [user?.uid]);
 
@@ -153,9 +202,10 @@ const Profile = () => {
   );
 
   useEffect(() => {
-    if (!user?.uid) return;
+    const currentUser = auth.currentUser;
+    if (!currentUser?.uid) return;
 
-    const docRef = doc(db, "users", user.uid);
+    const docRef = doc(db, "users", currentUser.uid);
     const unsub = onSnapshot(
       docRef,
       (snap) => {
@@ -168,10 +218,15 @@ const Profile = () => {
         setDateOfBirth(data.dateOfBirth || "");
         setAccountCreatedDate(data.createdAt?.toDate() || null);
 
-        setNotificationsEnabled(data.notificationsEnabled ?? true);
-        setRemindersEnabled(data.remindersEnabled ?? true);
-        setDarkModeEnabled(data.darkModeEnabled ?? false);
-        setSoundEnabled(data.soundEnabled ?? true);
+        const settings = (data.settings as Record<string, any>) || {};
+        setNotificationsEnabled(
+          settings.notifications ?? data.notificationsEnabled ?? true,
+        );
+        setRemindersEnabled(
+          settings.dailyReminder ?? data.remindersEnabled ?? true,
+        );
+        setDarkModeEnabled(settings.darkMode ?? data.darkModeEnabled ?? false);
+        setSoundEnabled(settings.soundEnabled ?? data.soundEnabled ?? true);
 
         if (data.photoURL) {
           setProfileImage(data.photoURL);
@@ -186,7 +241,7 @@ const Profile = () => {
     );
 
     return () => unsub();
-  }, [user?.uid]);
+  }, [user]);
 
   // Sync Firebase Auth changes to local state
   useEffect(() => {
@@ -550,11 +605,26 @@ const Profile = () => {
       const newValue = !currentValue;
       setter(newValue);
 
+      const settingsUpdate: Record<string, boolean> = {};
+      if (settingName === "notificationsEnabled") {
+        settingsUpdate.notifications = newValue;
+      }
+      if (settingName === "remindersEnabled") {
+        settingsUpdate.dailyReminder = newValue;
+      }
+      if (settingName === "darkModeEnabled") {
+        settingsUpdate.darkMode = newValue;
+      }
+      if (settingName === "soundEnabled") {
+        settingsUpdate.soundEnabled = newValue;
+      }
+
       await setDoc(
         doc(db, "users", currentUser.uid),
         {
           [settingName]: newValue,
-          updatedAt: new Date(),
+          settings: settingsUpdate,
+          updatedAt: serverTimestamp(),
         },
         { merge: true },
       );
