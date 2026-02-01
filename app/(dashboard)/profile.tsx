@@ -2,16 +2,23 @@ import { AuthContext } from "@/context/AuthContext";
 import { uploadImageToCloudinary } from "@/services/cloudinary";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { signOut, updateProfile } from "firebase/auth";
-import { doc, getDoc, setDoc } from "firebase/firestore";
-import React, { useContext, useEffect, useState } from "react";
+import {
+  doc,
+  getDoc,
+  onSnapshot,
+  serverTimestamp,
+  setDoc,
+} from "firebase/firestore";
+import React, { useCallback, useContext, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Image,
   Pressable,
   ScrollView,
+  Switch,
   Text,
   TextInput,
   View,
@@ -40,59 +47,145 @@ const Profile = () => {
   const [totalJournals, setTotalJournals] = useState(0);
   const [totalTasks, setTotalTasks] = useState(0);
 
+  // Settings State
+  const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+  const [remindersEnabled, setRemindersEnabled] = useState(true);
+  const [darkModeEnabled, setDarkModeEnabled] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(true);
+
+  const loadProfile = useCallback(async () => {
+    if (!user?.uid) return;
+
+    try {
+      console.log("Loading profile for user:", user.uid);
+      let snap = await getDoc(doc(db, "users", user.uid));
+
+      let photoURL = null;
+      let displayNameValue = "";
+
+      if (snap.exists()) {
+        const data = snap.data();
+        console.log("✓ Loaded user data from Firestore:", data);
+        photoURL = data.photoURL || null;
+        displayNameValue = data.displayName || data.name || "";
+
+        // Load additional fields
+        setBio(data.bio || "");
+        setPhoneNumber(data.phoneNumber || "");
+        setLocation(data.location || "");
+        setDateOfBirth(data.dateOfBirth || "");
+        setAccountCreatedDate(data.createdAt?.toDate() || null);
+
+        // Load settings
+        setNotificationsEnabled(data.notificationsEnabled ?? true);
+        setRemindersEnabled(data.remindersEnabled ?? true);
+        setDarkModeEnabled(data.darkModeEnabled ?? false);
+        setSoundEnabled(data.soundEnabled ?? true);
+      } else {
+        console.log("✗ No Firestore document found for user:", user.uid);
+
+        const currentUser = auth.currentUser;
+        if (currentUser) {
+          await setDoc(
+            doc(db, "users", currentUser.uid),
+            {
+              displayName: currentUser.displayName || "",
+              email: currentUser.email || "",
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            },
+            { merge: true },
+          );
+
+          snap = await getDoc(doc(db, "users", currentUser.uid));
+          if (snap.exists()) {
+            const data = snap.data();
+            photoURL = data.photoURL || null;
+            displayNameValue = data.displayName || data.name || "";
+
+            setBio(data.bio || "");
+            setPhoneNumber(data.phoneNumber || "");
+            setLocation(data.location || "");
+            setDateOfBirth(data.dateOfBirth || "");
+            setAccountCreatedDate(data.createdAt?.toDate() || null);
+
+            setNotificationsEnabled(data.notificationsEnabled ?? true);
+            setRemindersEnabled(data.remindersEnabled ?? true);
+            setDarkModeEnabled(data.darkModeEnabled ?? false);
+            setSoundEnabled(data.soundEnabled ?? true);
+          }
+        }
+      }
+
+      // FALLBACK: Load from Firebase Auth if not in Firestore
+      const currentUser = auth.currentUser;
+      if (currentUser) {
+        console.log("Firebase Auth photoURL:", currentUser.photoURL);
+        console.log("Firebase Auth displayName:", currentUser.displayName);
+
+        if (!photoURL && currentUser.photoURL) {
+          console.log("✓ Using photoURL from Firebase Auth");
+          photoURL = currentUser.photoURL;
+        }
+
+        if (!displayNameValue && currentUser.displayName) {
+          console.log("✓ Using displayName from Firebase Auth");
+          displayNameValue = currentUser.displayName;
+        }
+      }
+
+      setProfileImage(photoURL);
+      setDisplayName(displayNameValue);
+    } catch (error) {
+      console.error("Profile load error:", error);
+    }
+  }, [user?.uid]);
+
   // Load profile from Firestore (with fallback to Firebase Auth)
+  useEffect(() => {
+    loadProfile();
+  }, [loadProfile]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadProfile();
+    }, [loadProfile]),
+  );
+
   useEffect(() => {
     if (!user?.uid) return;
 
-    const loadProfile = async () => {
-      try {
-        console.log("Loading profile for user:", user.uid);
-        const snap = await getDoc(doc(db, "users", user.uid));
+    const docRef = doc(db, "users", user.uid);
+    const unsub = onSnapshot(
+      docRef,
+      (snap) => {
+        if (!snap.exists()) return;
+        const data = snap.data();
 
-        let photoURL = null;
-        let displayNameValue = "";
+        setBio(data.bio || "");
+        setPhoneNumber(data.phoneNumber || "");
+        setLocation(data.location || "");
+        setDateOfBirth(data.dateOfBirth || "");
+        setAccountCreatedDate(data.createdAt?.toDate() || null);
 
-        if (snap.exists()) {
-          const data = snap.data();
-          console.log("✓ Loaded user data from Firestore:", data);
-          photoURL = data.photoURL || null;
-          displayNameValue = data.displayName || data.name || "";
+        setNotificationsEnabled(data.notificationsEnabled ?? true);
+        setRemindersEnabled(data.remindersEnabled ?? true);
+        setDarkModeEnabled(data.darkModeEnabled ?? false);
+        setSoundEnabled(data.soundEnabled ?? true);
 
-          // Load additional fields
-          setBio(data.bio || "");
-          setPhoneNumber(data.phoneNumber || "");
-          setLocation(data.location || "");
-          setDateOfBirth(data.dateOfBirth || "");
-          setAccountCreatedDate(data.createdAt?.toDate() || null);
-        } else {
-          console.log("✗ No Firestore document found for user:", user.uid);
+        if (data.photoURL) {
+          setProfileImage(data.photoURL);
         }
-
-        // FALLBACK: Load from Firebase Auth if not in Firestore
-        const currentUser = auth.currentUser;
-        if (currentUser) {
-          console.log("Firebase Auth photoURL:", currentUser.photoURL);
-          console.log("Firebase Auth displayName:", currentUser.displayName);
-
-          if (!photoURL && currentUser.photoURL) {
-            console.log("✓ Using photoURL from Firebase Auth");
-            photoURL = currentUser.photoURL;
-          }
-
-          if (!displayNameValue && currentUser.displayName) {
-            console.log("✓ Using displayName from Firebase Auth");
-            displayNameValue = currentUser.displayName;
-          }
+        if (data.displayName) {
+          setDisplayName(data.displayName);
         }
+      },
+      (error) => {
+        console.error("Profile realtime listener error:", error);
+      },
+    );
 
-        setProfileImage(photoURL);
-        setDisplayName(displayNameValue);
-      } catch (error) {
-        console.error("Profile load error:", error);
-      }
-    };
-
-    loadProfile();
+    return () => unsub();
   }, [user?.uid]);
 
   // Sync Firebase Auth changes to local state
@@ -185,7 +278,7 @@ const Profile = () => {
     try {
       setUploading(true);
       console.log("=== START UPLOAD PROCESS ===");
-      console.log("User ID:", currentUser.uid);
+
       console.log("User Email:", currentUser.email);
 
       // Step 1: Upload to Cloudinary
@@ -209,7 +302,7 @@ const Profile = () => {
 
       // Step 3: Save to Firestore
       console.log("Step 3: Saving to Firestore...");
-      await setDoc(
+      const result = await setDoc(
         doc(db, "users", currentUser.uid),
         {
           photoURL: cloudImageUrl,
@@ -227,7 +320,7 @@ const Profile = () => {
       console.log("✓ Local state updated with photoURL:", cloudImageUrl);
       console.log("=== UPLOAD PROCESS COMPLETE ===");
 
-      Alert.alert("Success", "Profile picture updated!");
+      Alert.alert("Success", "Profile picture updated successfully!");
     } catch (error: any) {
       console.error("✗ Upload Error:", error);
       console.error("Error details:", {
@@ -235,7 +328,10 @@ const Profile = () => {
         message: error.message,
         stack: error.stack,
       });
-      Alert.alert("Upload failed", error.message || "Something went wrong");
+      Alert.alert(
+        "Upload failed",
+        error.message || "Failed to upload profile picture. Please try again.",
+      );
     } finally {
       setUploading(false);
     }
@@ -245,27 +341,47 @@ const Profile = () => {
   const handleUpdateProfile = async () => {
     const currentUser = auth.currentUser;
 
-    if (!displayName.trim() || !currentUser) {
-      Alert.alert("Error", "Please enter a name and login first");
+    if (!displayName.trim()) {
+      Alert.alert("Error", "Please enter a name");
+      return;
+    }
+
+    if (!currentUser) {
+      Alert.alert("Error", "No user logged in");
       return;
     }
 
     try {
       setUploading(true);
+      console.log("Updating profile for user:", currentUser.uid);
 
-      await updateProfile(currentUser, { displayName });
+      // Update Firebase Auth
+      await updateProfile(currentUser, { displayName: displayName.trim() });
+      console.log("✓ Firebase Auth displayName updated");
 
+      // Reload user
+      await currentUser.reload();
+      console.log("✓ Firebase Auth user reloaded");
+
+      // Save to Firestore
       await setDoc(
         doc(db, "users", currentUser.uid),
-        { displayName, updatedAt: new Date() },
+        {
+          displayName: displayName.trim(),
+          updatedAt: serverTimestamp(),
+        },
         { merge: true },
       );
+      console.log("✓ Firestore displayName saved");
 
       setIsEditing(false);
       Alert.alert("Success", "Profile updated successfully!");
     } catch (error: any) {
       console.error("Error updating profile:", error);
-      Alert.alert("Error updating profile", error.message);
+      Alert.alert(
+        "Error updating profile",
+        error.message || "Something went wrong",
+      );
     } finally {
       setUploading(false);
     }
@@ -274,19 +390,45 @@ const Profile = () => {
   // Update bio
   const handleUpdateBio = async () => {
     const currentUser = auth.currentUser;
-    if (!currentUser) return;
+    if (!currentUser) {
+      Alert.alert("Error", "No user logged in");
+      return;
+    }
+
+    if (!bio.trim()) {
+      Alert.alert("Error", "Bio cannot be empty");
+      return;
+    }
 
     try {
       setUploading(true);
+      console.log("Saving bio to Firestore for user:", currentUser.uid);
+      const trimmedBio = bio.trim();
+
       await setDoc(
         doc(db, "users", currentUser.uid),
-        { bio, updatedAt: new Date() },
+        {
+          bio: trimmedBio,
+          updatedAt: serverTimestamp(),
+        },
         { merge: true },
       );
+
+      const savedSnap = await getDoc(doc(db, "users", currentUser.uid));
+      const savedBio = savedSnap.exists() ? savedSnap.data().bio : null;
+      if (savedBio !== trimmedBio) {
+        throw new Error("Bio save confirmation failed");
+      }
+
+      console.log("✓ Bio saved successfully:", savedBio);
+      setBio(savedBio || "");
+      await currentUser.reload();
+      console.log("✓ User data reloaded");
       setIsEditingBio(false);
-      Alert.alert("Success", "Bio updated!");
+      Alert.alert("Success", "Bio saved to Firebase successfully!");
     } catch (error: any) {
-      Alert.alert("Error", error.message);
+      console.error("Error saving bio:", error);
+      Alert.alert("Error", error.message || "Failed to save bio");
     } finally {
       setUploading(false);
     }
@@ -295,19 +437,66 @@ const Profile = () => {
   // Update contact info
   const handleUpdateContact = async () => {
     const currentUser = auth.currentUser;
-    if (!currentUser) return;
+    if (!currentUser) {
+      Alert.alert("Error", "No user logged in");
+      return;
+    }
+
+    // Validate at least one field is filled
+    if (!phoneNumber.trim() && !location.trim() && !dateOfBirth.trim()) {
+      Alert.alert("Error", "Please fill in at least one contact field");
+      return;
+    }
 
     try {
       setUploading(true);
+      console.log(
+        "Saving contact info to Firestore for user:",
+        currentUser.uid,
+      );
+      const trimmedPhone = phoneNumber.trim();
+      const trimmedLocation = location.trim();
+      const trimmedDob = dateOfBirth.trim();
+
       await setDoc(
         doc(db, "users", currentUser.uid),
-        { phoneNumber, location, dateOfBirth, updatedAt: new Date() },
+        {
+          phoneNumber: trimmedPhone,
+          location: trimmedLocation,
+          dateOfBirth: trimmedDob,
+          updatedAt: serverTimestamp(),
+        },
         { merge: true },
       );
+
+      const savedSnap = await getDoc(doc(db, "users", currentUser.uid));
+      const savedData = savedSnap.exists() ? savedSnap.data() : null;
+      const savedPhone = savedData?.phoneNumber || "";
+      const savedLocation = savedData?.location || "";
+      const savedDob = savedData?.dateOfBirth || "";
+
+      if (
+        savedPhone !== trimmedPhone ||
+        savedLocation !== trimmedLocation ||
+        savedDob !== trimmedDob
+      ) {
+        throw new Error("Contact info save confirmation failed");
+      }
+
+      console.log("✓ Contact info saved successfully");
+      setPhoneNumber(savedPhone);
+      setLocation(savedLocation);
+      setDateOfBirth(savedDob);
+      await currentUser.reload();
+      console.log("✓ User data reloaded");
       setIsEditingContact(false);
-      Alert.alert("Success", "Contact info updated!");
+      Alert.alert("Success", "Contact information saved to Firebase!");
     } catch (error: any) {
-      Alert.alert("Error", error.message);
+      console.error("Error saving contact info:", error);
+      Alert.alert(
+        "Error",
+        error.message || "Failed to save contact information",
+      );
     } finally {
       setUploading(false);
     }
@@ -343,6 +532,147 @@ const Profile = () => {
         },
       ],
     );
+  };
+
+  // Toggle Settings
+  const handleToggleSetting = async (
+    settingName: string,
+    currentValue: boolean,
+    setter: (value: boolean) => void,
+  ) => {
+    const currentUser = auth.currentUser;
+    if (!currentUser) {
+      Alert.alert("Error", "No user logged in");
+      return;
+    }
+
+    try {
+      const newValue = !currentValue;
+      setter(newValue);
+
+      await setDoc(
+        doc(db, "users", currentUser.uid),
+        {
+          [settingName]: newValue,
+          updatedAt: new Date(),
+        },
+        { merge: true },
+      );
+
+      console.log(`✓ ${settingName} updated to:`, newValue);
+    } catch (error: any) {
+      console.error(`Error updating ${settingName}:`, error);
+      setter(currentValue); // Revert on error
+      Alert.alert("Error", `Failed to update ${settingName}`);
+    }
+  };
+
+  // Privacy & Security
+  const handlePrivacySecurity = () => {
+    Alert.alert("Privacy & Security", "Choose an option", [
+      {
+        text: "Change Password",
+        onPress: () => {
+          Alert.alert(
+            "Change Password",
+            "A password reset link will be sent to your email.",
+            [
+              { text: "Cancel", style: "cancel" },
+              {
+                text: "Send Link",
+                onPress: async () => {
+                  try {
+                    const { sendPasswordResetEmail } =
+                      await import("firebase/auth");
+                    if (user?.email) {
+                      await sendPasswordResetEmail(auth, user.email);
+                      Alert.alert(
+                        "Success",
+                        `Password reset email sent to ${user.email}`,
+                      );
+                    }
+                  } catch (error: any) {
+                    Alert.alert("Error", error.message);
+                  }
+                },
+              },
+            ],
+          );
+        },
+      },
+      {
+        text: "Data Privacy",
+        onPress: () => {
+          Alert.alert(
+            "Data Privacy",
+            "Your data is encrypted and stored securely. We never share your personal information with third parties. All journal entries are private and only accessible by you.",
+          );
+        },
+      },
+      {
+        text: "Account Visibility",
+        onPress: () => {
+          Alert.alert(
+            "Account Visibility",
+            "Your account is private by default. Only you can see your journals, tasks, and personal information.",
+          );
+        },
+      },
+      {
+        text: "Two-Factor Authentication",
+        onPress: () => {
+          Alert.alert(
+            "Two-Factor Authentication",
+            "Enhanced security feature coming soon! This will add an extra layer of protection to your account.",
+          );
+        },
+      },
+      { text: "Close", style: "cancel" },
+    ]);
+  };
+
+  // Help & Support
+  const handleHelpSupport = () => {
+    Alert.alert("Help & Support", "How can we help you?", [
+      {
+        text: "Contact Support",
+        onPress: () => {
+          Alert.alert(
+            "Contact Support",
+            "Email: support@soulnotes.com\n\nOur team will respond within 24 hours.",
+            [{ text: "OK" }],
+          );
+        },
+      },
+      {
+        text: "Report a Bug",
+        onPress: () => {
+          Alert.alert(
+            "Report a Bug",
+            "Please email us at bugs@soulnotes.com with:\n\n• Description of the issue\n• Steps to reproduce\n• Screenshots (if applicable)\n\nThank you for helping us improve!",
+          );
+        },
+      },
+      {
+        text: "FAQ",
+        onPress: () => {
+          Alert.alert(
+            "Frequently Asked Questions",
+            "Q: How do I backup my data?\nA: Your data is automatically backed up to the cloud.\n\nQ: Can I export my journals?\nA: Export feature coming soon!\n\nQ: Is my data secure?\nA: Yes! All data is encrypted and stored securely.",
+          );
+        },
+      },
+      {
+        text: "App Info",
+        onPress: () => {
+          Alert.alert(
+            "SoulNotes",
+            "Version: 1.0.0\n\nA mindful journaling app to track your thoughts, emotions, and daily life.\n\n© 2026 SoulNotes. All rights reserved.",
+          );
+        },
+      },
+      { text: "Close", style: "cancel" },
+    ]);
   };
 
   // Logout
@@ -463,6 +793,7 @@ const Profile = () => {
                 value={displayName}
                 onChangeText={setDisplayName}
                 placeholder="Enter your name"
+                editable={!uploading}
                 style={{
                   backgroundColor: "#F3F4F6",
                   borderRadius: 16,
@@ -471,17 +802,44 @@ const Profile = () => {
                   marginBottom: 16,
                 }}
               />
-              <Pressable
-                onPress={handleUpdateProfile}
-                style={{
-                  backgroundColor: "#10B981",
-                  paddingVertical: 12,
-                  borderRadius: 16,
-                  alignItems: "center",
-                }}
-              >
-                <Text style={{ color: "#fff", fontWeight: "600" }}>Save</Text>
-              </Pressable>
+              <View style={{ flexDirection: "row", gap: 12 }}>
+                <Pressable
+                  onPress={() => setIsEditing(false)}
+                  disabled={uploading}
+                  style={{
+                    flex: 1,
+                    backgroundColor: "#E5E7EB",
+                    paddingVertical: 12,
+                    borderRadius: 16,
+                    alignItems: "center",
+                    opacity: uploading ? 0.5 : 1,
+                  }}
+                >
+                  <Text style={{ color: "#374151", fontWeight: "600" }}>
+                    Cancel
+                  </Text>
+                </Pressable>
+                <Pressable
+                  onPress={handleUpdateProfile}
+                  disabled={uploading}
+                  style={{
+                    flex: 1,
+                    backgroundColor: "#10B981",
+                    paddingVertical: 12,
+                    borderRadius: 16,
+                    alignItems: "center",
+                    opacity: uploading ? 0.5 : 1,
+                  }}
+                >
+                  {uploading ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={{ color: "#fff", fontWeight: "600" }}>
+                      Save
+                    </Text>
+                  )}
+                </Pressable>
+              </View>
             </>
           ) : (
             <Text style={{ color: "#374151" }}>{displayName || "Not set"}</Text>
@@ -518,6 +876,7 @@ const Profile = () => {
                 placeholder="Tell us about yourself..."
                 multiline
                 numberOfLines={4}
+                editable={!uploading}
                 style={{
                   backgroundColor: "#F3F4F6",
                   borderRadius: 16,
@@ -528,17 +887,44 @@ const Profile = () => {
                   minHeight: 100,
                 }}
               />
-              <Pressable
-                onPress={handleUpdateBio}
-                style={{
-                  backgroundColor: "#10B981",
-                  paddingVertical: 12,
-                  borderRadius: 16,
-                  alignItems: "center",
-                }}
-              >
-                <Text style={{ color: "#fff", fontWeight: "600" }}>Save</Text>
-              </Pressable>
+              <View style={{ flexDirection: "row", gap: 12 }}>
+                <Pressable
+                  onPress={() => setIsEditingBio(false)}
+                  disabled={uploading}
+                  style={{
+                    flex: 1,
+                    backgroundColor: "#E5E7EB",
+                    paddingVertical: 12,
+                    borderRadius: 16,
+                    alignItems: "center",
+                    opacity: uploading ? 0.5 : 1,
+                  }}
+                >
+                  <Text style={{ color: "#374151", fontWeight: "600" }}>
+                    Cancel
+                  </Text>
+                </Pressable>
+                <Pressable
+                  onPress={handleUpdateBio}
+                  disabled={uploading}
+                  style={{
+                    flex: 1,
+                    backgroundColor: "#10B981",
+                    paddingVertical: 12,
+                    borderRadius: 16,
+                    alignItems: "center",
+                    opacity: uploading ? 0.5 : 1,
+                  }}
+                >
+                  {uploading ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={{ color: "#fff", fontWeight: "600" }}>
+                      Save
+                    </Text>
+                  )}
+                </Pressable>
+              </View>
             </>
           ) : (
             <Text style={{ color: "#374151" }}>
@@ -584,6 +970,7 @@ const Profile = () => {
                   onChangeText={setPhoneNumber}
                   placeholder="+1 234 567 8900"
                   keyboardType="phone-pad"
+                  editable={!uploading}
                   style={{
                     backgroundColor: "#F3F4F6",
                     borderRadius: 12,
@@ -603,6 +990,7 @@ const Profile = () => {
                   value={location}
                   onChangeText={setLocation}
                   placeholder="City, Country"
+                  editable={!uploading}
                   style={{
                     backgroundColor: "#F3F4F6",
                     borderRadius: 12,
@@ -622,6 +1010,7 @@ const Profile = () => {
                   value={dateOfBirth}
                   onChangeText={setDateOfBirth}
                   placeholder="YYYY-MM-DD"
+                  editable={!uploading}
                   style={{
                     backgroundColor: "#F3F4F6",
                     borderRadius: 12,
@@ -631,17 +1020,44 @@ const Profile = () => {
                 />
               </View>
 
-              <Pressable
-                onPress={handleUpdateContact}
-                style={{
-                  backgroundColor: "#10B981",
-                  paddingVertical: 12,
-                  borderRadius: 16,
-                  alignItems: "center",
-                }}
-              >
-                <Text style={{ color: "#fff", fontWeight: "600" }}>Save</Text>
-              </Pressable>
+              <View style={{ flexDirection: "row", gap: 12 }}>
+                <Pressable
+                  onPress={() => setIsEditingContact(false)}
+                  disabled={uploading}
+                  style={{
+                    flex: 1,
+                    backgroundColor: "#E5E7EB",
+                    paddingVertical: 12,
+                    borderRadius: 16,
+                    alignItems: "center",
+                    opacity: uploading ? 0.5 : 1,
+                  }}
+                >
+                  <Text style={{ color: "#374151", fontWeight: "600" }}>
+                    Cancel
+                  </Text>
+                </Pressable>
+                <Pressable
+                  onPress={handleUpdateContact}
+                  disabled={uploading}
+                  style={{
+                    flex: 1,
+                    backgroundColor: "#10B981",
+                    paddingVertical: 12,
+                    borderRadius: 16,
+                    alignItems: "center",
+                    opacity: uploading ? 0.5 : 1,
+                  }}
+                >
+                  {uploading ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <Text style={{ color: "#fff", fontWeight: "600" }}>
+                      Save
+                    </Text>
+                  )}
+                </Pressable>
+              </View>
             </>
           ) : (
             <>
@@ -683,18 +1099,35 @@ const Profile = () => {
           </Text>
 
           <View style={{ marginBottom: 12 }}>
-            <Text style={{ color: "#6B7280", fontSize: 14 }}>Email</Text>
-            <Text style={{ color: "#374151", marginTop: 4 }}>
-              {user?.email}
+            <Text style={{ color: "#6B7280", fontSize: 14, fontWeight: "500" }}>
+              Login Email
+            </Text>
+            <Text style={{ color: "#374151", marginTop: 4, fontSize: 15 }}>
+              {user?.email || auth.currentUser?.email || "Not available"}
             </Text>
           </View>
 
+          <View style={{ marginBottom: 12 }}>
+            <Text
+              style={{
+                color: "#6B7280",
+                marginTop: 4,
+                fontSize: 12,
+                fontFamily: "monospace",
+              }}
+              numberOfLines={1}
+              ellipsizeMode="middle"
+            ></Text>
+          </View>
+
           {accountCreatedDate && (
-            <View>
-              <Text style={{ color: "#6B7280", fontSize: 14 }}>
+            <View style={{ marginBottom: 12 }}>
+              <Text
+                style={{ color: "#6B7280", fontSize: 14, fontWeight: "500" }}
+              >
                 Member Since
               </Text>
-              <Text style={{ color: "#374151", marginTop: 4 }}>
+              <Text style={{ color: "#374151", marginTop: 4, fontSize: 15 }}>
                 {accountCreatedDate.toLocaleDateString("en-US", {
                   month: "long",
                   day: "numeric",
@@ -703,6 +1136,34 @@ const Profile = () => {
               </Text>
             </View>
           )}
+
+          <View>
+            <Text style={{ color: "#6B7280", fontSize: 14, fontWeight: "500" }}>
+              Account Status
+            </Text>
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                marginTop: 4,
+              }}
+            >
+              <View
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: 4,
+                  backgroundColor: "#10B981",
+                  marginRight: 8,
+                }}
+              />
+              <Text
+                style={{ color: "#10B981", fontSize: 15, fontWeight: "600" }}
+              >
+                Active
+              </Text>
+            </View>
+          </View>
         </View>
 
         {/* Settings */}
@@ -718,7 +1179,8 @@ const Profile = () => {
             Settings
           </Text>
 
-          <Pressable
+          {/* Push Notifications */}
+          <View
             style={{
               flexDirection: "row",
               alignItems: "center",
@@ -728,13 +1190,132 @@ const Profile = () => {
             }}
           >
             <Ionicons name="notifications-outline" size={20} color="#6B7280" />
-            <Text style={{ marginLeft: 12, color: "#374151", flex: 1 }}>
-              Notifications
-            </Text>
-            <Ionicons name="chevron-forward" size={20} color="#6B7280" />
-          </Pressable>
+            <View style={{ marginLeft: 12, flex: 1 }}>
+              <Text style={{ color: "#374151", fontWeight: "600" }}>
+                Push Notifications
+              </Text>
+              <Text style={{ color: "#6B7280", fontSize: 12, marginTop: 2 }}>
+                Receive updates and alerts
+              </Text>
+            </View>
+            <Switch
+              value={notificationsEnabled}
+              onValueChange={() =>
+                handleToggleSetting(
+                  "notificationsEnabled",
+                  notificationsEnabled,
+                  setNotificationsEnabled,
+                )
+              }
+              trackColor={{ false: "#D1D5DB", true: "#86EFAC" }}
+              thumbColor={notificationsEnabled ? "#10B981" : "#f4f3f4"}
+            />
+          </View>
 
+          {/* Reminders */}
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              paddingVertical: 12,
+              borderBottomWidth: 1,
+              borderBottomColor: "#F3F4F6",
+            }}
+          >
+            <Ionicons name="time-outline" size={20} color="#6B7280" />
+            <View style={{ marginLeft: 12, flex: 1 }}>
+              <Text style={{ color: "#374151", fontWeight: "600" }}>
+                Daily Reminders
+              </Text>
+              <Text style={{ color: "#6B7280", fontSize: 12, marginTop: 2 }}>
+                Get reminded to journal daily
+              </Text>
+            </View>
+            <Switch
+              value={remindersEnabled}
+              onValueChange={() =>
+                handleToggleSetting(
+                  "remindersEnabled",
+                  remindersEnabled,
+                  setRemindersEnabled,
+                )
+              }
+              trackColor={{ false: "#D1D5DB", true: "#86EFAC" }}
+              thumbColor={remindersEnabled ? "#10B981" : "#f4f3f4"}
+            />
+          </View>
+
+          {/* Dark Mode */}
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              paddingVertical: 12,
+              borderBottomWidth: 1,
+              borderBottomColor: "#F3F4F6",
+            }}
+          >
+            <Ionicons name="moon-outline" size={20} color="#6B7280" />
+            <View style={{ marginLeft: 12, flex: 1 }}>
+              <Text style={{ color: "#374151", fontWeight: "600" }}>
+                Dark Mode
+              </Text>
+              <Text style={{ color: "#6B7280", fontSize: 12, marginTop: 2 }}>
+                Enable dark theme
+              </Text>
+            </View>
+            <Switch
+              value={darkModeEnabled}
+              onValueChange={() =>
+                handleToggleSetting(
+                  "darkModeEnabled",
+                  darkModeEnabled,
+                  setDarkModeEnabled,
+                )
+              }
+              trackColor={{ false: "#D1D5DB", true: "#86EFAC" }}
+              thumbColor={darkModeEnabled ? "#10B981" : "#f4f3f4"}
+            />
+          </View>
+
+          {/* Sound */}
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              paddingVertical: 12,
+              borderBottomWidth: 1,
+              borderBottomColor: "#F3F4F6",
+            }}
+          >
+            <Ionicons name="volume-high-outline" size={20} color="#6B7280" />
+            <View style={{ marginLeft: 12, flex: 1 }}>
+              <Text style={{ color: "#374151", fontWeight: "600" }}>
+                Sound Effects
+              </Text>
+              <Text style={{ color: "#6B7280", fontSize: 12, marginTop: 2 }}>
+                Enable app sounds
+              </Text>
+            </View>
+            <Switch
+              value={soundEnabled}
+              onValueChange={() =>
+                handleToggleSetting(
+                  "soundEnabled",
+                  soundEnabled,
+                  setSoundEnabled,
+                )
+              }
+              trackColor={{ false: "#D1D5DB", true: "#86EFAC" }}
+              thumbColor={soundEnabled ? "#10B981" : "#f4f3f4"}
+            />
+          </View>
+        </View>
+
+        {/* Privacy & Security */}
+        <View>
           <Pressable
+            onPress={handlePrivacySecurity}
             style={{
               flexDirection: "row",
               alignItems: "center",
@@ -753,21 +1334,23 @@ const Profile = () => {
             </Text>
             <Ionicons name="chevron-forward" size={20} color="#6B7280" />
           </Pressable>
-
-          <Pressable
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              paddingVertical: 12,
-            }}
-          >
-            <Ionicons name="help-circle-outline" size={20} color="#6B7280" />
-            <Text style={{ marginLeft: 12, color: "#374151", flex: 1 }}>
-              Help & Support
-            </Text>
-            <Ionicons name="chevron-forward" size={20} color="#6B7280" />
-          </Pressable>
         </View>
+
+        {/* Help & Support */}
+        <Pressable
+          onPress={handleHelpSupport}
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            paddingVertical: 12,
+          }}
+        >
+          <Ionicons name="help-circle-outline" size={20} color="#6B7280" />
+          <Text style={{ marginLeft: 12, color: "#374151", flex: 1 }}>
+            Help & Support
+          </Text>
+          <Ionicons name="chevron-forward" size={20} color="#6B7280" />
+        </Pressable>
 
         {/* Logout */}
         <Pressable
