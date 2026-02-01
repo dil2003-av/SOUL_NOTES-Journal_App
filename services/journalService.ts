@@ -1,14 +1,14 @@
 import {
-    addDoc,
-    collection,
-    deleteDoc,
-    doc,
-    getDoc,
-    getDocs,
-    query,
-    Timestamp,
-    updateDoc,
-    where
+  addDoc,
+  collection,
+  deleteDoc,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  Timestamp,
+  updateDoc,
+  where,
 } from "firebase/firestore";
 import { auth, db } from "./firebase";
 
@@ -18,6 +18,7 @@ export interface JournalEntry {
   content: string;
   date: string;
   createdAt: Date;
+  isComplete?: boolean;
 }
 
 // Get all journal entries for the current user
@@ -42,6 +43,7 @@ export const getJournalEntries = async (): Promise<JournalEntry[]> => {
         content: data.content,
         date: data.date,
         createdAt: data.createdAt?.toDate() || new Date(),
+        isComplete: data.isComplete || false,
       });
     });
 
@@ -137,6 +139,25 @@ export const updateJournalEntry = async (
     });
   } catch (error) {
     console.error("Error updating journal entry:", error);
+    throw error;
+  }
+};
+
+// Mark journal entry as complete
+export const updateJournalEntryComplete = async (
+  entryId: string,
+  isComplete: boolean,
+): Promise<void> => {
+  const user = auth.currentUser;
+  if (!user) {
+    throw new Error("User not authenticated");
+  }
+
+  try {
+    const entryRef = doc(db, "journals", entryId);
+    await updateDoc(entryRef, { isComplete });
+  } catch (error) {
+    console.error("Error updating journal entry complete status:", error);
     throw error;
   }
 };

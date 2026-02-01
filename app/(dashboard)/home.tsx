@@ -1,9 +1,18 @@
 ﻿import { useLoader } from "@/hooks/useLoader";
 import { logout } from "@/services/authService";
-import { auth } from "@/services/firebase";
-import { getJournalEntries, JournalEntry } from "@/services/journalService";
+import { auth, db } from "@/services/firebase";
+import {
+  getJournalEntries,
+  JournalEntry,
+  updateJournalEntryComplete,
+} from "@/services/journalService";
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import { useFocusEffect, useRouter } from "expo-router";
+import {
+  collection,
+  doc,
+  updateDoc,
+} from "firebase/firestore";
 import React, { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
@@ -11,10 +20,18 @@ import {
   FlatList,
   Pressable,
   RefreshControl,
+  ScrollView,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+
+interface Task {
+  id: string;
+  title: string;
+  description: string;
+  isComplete: boolean;
+}
 
 const MOOD_EMOJIS = ["😊", "😢", "😡", "😰", "😴", "🤩", "😌", "🤔"];
 
@@ -25,6 +42,10 @@ const Home = () => {
   const [userName, setUserName] = useState("");
   const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [completedTasks, setCompletedTasks] = useState(0);
+  const [totalTasks, setTotalTasks] = useState(0);
+  const [achievements, setAchievements] = useState<string[]>([]);
+  const [tasks, setTasks] = useState<Task[]>([]);
 
   useEffect(() => {
     const currentUser = auth.currentUser;
@@ -32,12 +53,78 @@ const Home = () => {
       setUserName(currentUser.displayName || "User");
     }
     fetchJournalEntries();
+   
   }, []);
+
+
+
+  const handleToggleTaskComplete = async (task: Task) => {
+    try {
+      const taskDoc = doc(db, "tasks", task.id);
+      await updateDoc(taskDoc, { isComplete: !task.isComplete });
+
+      // Calculate new state first
+      const updatedTasks = tasks.map((t) =>
+        t.id === task.id ? { ...t, isComplete: !t.isComplete } : t,
+      );
+
+      // Update all state at once
+      setTasks(updatedTasks);
+
+      // Count both completed tasks and completed journal entries
+      const completedTasksCount = updatedTasks.filter(
+        (t) => t.isComplete,
+      ).length;
+      const completedEntriesCount = journalEntries.filter(
+        (e) => e.isComplete,
+      ).length;
+      const totalCompleted = completedTasksCount + completedEntriesCount;
+
+      setCompletedTasks(totalCompleted);
+
+      if (!task.isComplete) {
+        Alert.alert("✅ Great!", `"${task.title}" marked as complete!`);
+      }
+    } catch (error) {
+      console.error("Error updating task:", error);
+      Alert.alert("Error", "Failed to update task");
+    }
+  };
+
+  const handleToggleJournalComplete = async (entry: JournalEntry) => {
+    try {
+      const newStatus = !(entry.isComplete || false);
+      await updateJournalEntryComplete(entry.id, newStatus);
+
+      // Update local state immediately
+      const updatedEntries = journalEntries.map((e) =>
+        e.id === entry.id ? { ...e, isComplete: newStatus } : e,
+      );
+      setJournalEntries(updatedEntries);
+
+      // Update stats - count both completed tasks and completed journal entries
+      const completedTasksCount = tasks.filter((t) => t.isComplete).length;
+      const completedEntriesCount = updatedEntries.filter(
+        (e) => e.isComplete,
+      ).length;
+      const totalCompleted = completedTasksCount + completedEntriesCount;
+
+      setCompletedTasks(totalCompleted);
+
+      if (newStatus) {
+        Alert.alert("✅ Marked!", `"${entry.title}" completed!`);
+      }
+    } catch (error) {
+      console.error("Error updating journal entry:", error);
+      Alert.alert("Error", "Failed to mark journal entry");
+    }
+  };
 
   // Auto-refresh when screen comes into focus (after saving a new entry)
   useFocusEffect(
     useCallback(() => {
       fetchJournalEntries();
+     
     }, []),
   );
 
@@ -131,7 +218,11 @@ const Home = () => {
       return (
         <Pressable
           onPress={() => handleEntryPress(item)}
-          className="bg-white rounded-2xl p-5 mb-4 border border-gray-100 active:bg-gray-50"
+          className={`rounded-2xl p-5 mb-4 border ${
+            item.isComplete
+              ? "bg-green-50 border-green-200"
+              : "bg-white border-gray-100"
+          }`}
           style={{
             elevation: 3,
             shadowColor: "#000",
@@ -141,9 +232,31 @@ const Home = () => {
           }}
         >
           <View className="flex-row items-start justify-between mb-3">
+            {/* Checkbox */}
+            <TouchableOpacity
+              onPress={() => handleToggleJournalComplete(item)}
+              className="mr-2 mt-1"
+            >
+              <View
+                className={`w-5 h-5 rounded-md border-2 items-center justify-center ${
+                  item.isComplete
+                    ? "bg-green-500 border-green-500"
+                    : "border-gray-300 bg-white"
+                }`}
+              >
+                {item.isComplete && (
+                  <MaterialIcons name="check" size={14} color="#fff" />
+                )}
+              </View>
+            </TouchableOpacity>
+
             <View className="flex-1 pr-3">
               <Text
-                className="text-lg font-bold text-gray-900 mb-1"
+                className={`text-lg font-bold mb-1 ${
+                  item.isComplete
+                    ? "text-gray-400 line-through"
+                    : "text-gray-900"
+                }`}
                 numberOfLines={2}
               >
                 {displayMood} {item.title}
@@ -163,7 +276,12 @@ const Home = () => {
               <MaterialIcons name="arrow-forward" size={16} color="#22C55E" />
             </View>
           </View>
-          <Text className="text-gray-600 text-sm leading-5" numberOfLines={3}>
+          <Text
+            className={`text-sm leading-5 ${
+              item.isComplete ? "text-gray-400" : "text-gray-600"
+            }`}
+            numberOfLines={3}
+          >
             {previewContent}
           </Text>
           <View className="flex-row items-center gap-1 mt-3 pt-3 border-t border-gray-100">
@@ -211,6 +329,24 @@ const Home = () => {
             {journalEntries.length === 1 ? "entry" : "entries"} in your journal
           </Text>
         </View>
+
+        {/* Task Stats */}
+        <View className="flex-row gap-4 mt-4">
+          <View className="flex-1 bg-blue-50 rounded-lg p-3 border border-blue-200">
+            <Text className="text-blue-700 font-bold text-lg">
+              {completedTasks}/{tasks.length + journalEntries.length}
+            </Text>
+            <Text className="text-blue-600 text-xs font-medium">Completed</Text>
+          </View>
+          <View className="flex-1 bg-purple-50 rounded-lg p-3 border border-purple-200">
+            <Text className="text-purple-700 font-bold text-lg">
+              {journalEntries.length}
+            </Text>
+            <Text className="text-purple-600 text-xs font-medium">
+              Total Entries
+            </Text>
+          </View>
+        </View>
       </View>
 
       {/* Journal Entries List */}
@@ -232,6 +368,124 @@ const Home = () => {
             paddingBottom: 100,
             flexGrow: 1,
           }}
+          ListHeaderComponent={
+            <>
+              {achievements.length > 0 && (
+                <View
+                  className="bg-gradient-to-r from-yellow-50 to-orange-50 rounded-2xl p-4 mb-6 border-2 border-yellow-300"
+                  style={{
+                    elevation: 2,
+                    shadowColor: "#FCD34D",
+                    shadowOpacity: 0.2,
+                    shadowRadius: 8,
+                    shadowOffset: { width: 0, height: 2 },
+                  }}
+                >
+                  <View className="flex-row items-center gap-2 mb-3">
+                    <Text className="text-2xl">🏆</Text>
+                    <Text className="text-lg font-bold text-orange-900">
+                      New Achievements!
+                    </Text>
+                  </View>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    className="gap-2"
+                  >
+                    {achievements.map((achievement, index) => (
+                      <View
+                        key={index}
+                        className="bg-white rounded-lg px-4 py-2 border border-yellow-200 mr-2"
+                        style={{
+                          elevation: 1,
+                          shadowColor: "#000",
+                          shadowOpacity: 0.05,
+                          shadowRadius: 4,
+                        }}
+                      >
+                        <Text className="text-sm font-semibold text-yellow-900">
+                          {achievement}
+                        </Text>
+                      </View>
+                    ))}
+                  </ScrollView>
+                </View>
+              )}
+
+              {tasks.length > 0 && (
+                <View className="mb-6">
+                  <View className="flex-row items-center justify-between mb-3">
+                    <Text className="text-lg font-bold text-gray-900">
+                      📋 Today's Tasks
+                    </Text>
+                    <Pressable
+                      onPress={() => router.push("/(dashboard)/tasks")}
+                    >
+                      <Text className="text-blue-600 font-semibold text-sm">
+                        View All
+                      </Text>
+                    </Pressable>
+                  </View>
+
+                  {tasks.map((task) => (
+                    <Pressable
+                      key={task.id}
+                      onPress={() => handleToggleTaskComplete(task)}
+                      className={`rounded-xl p-3 mb-2 flex-row items-center gap-3 border ${
+                        task.isComplete
+                          ? "bg-green-50 border-green-200"
+                          : "bg-white border-gray-200"
+                      }`}
+                      style={{
+                        elevation: 1,
+                        shadowColor: "#000",
+                        shadowOpacity: 0.05,
+                        shadowRadius: 4,
+                      }}
+                    >
+                      {/* Checkbox */}
+                      <View
+                        className={`w-5 h-5 rounded-md border-2 items-center justify-center ${
+                          task.isComplete
+                            ? "bg-green-500 border-green-500"
+                            : "border-gray-300 bg-white"
+                        }`}
+                      >
+                        {task.isComplete && (
+                          <MaterialIcons name="check" size={14} color="#fff" />
+                        )}
+                      </View>
+
+                      {/* Task Title */}
+                      <View className="flex-1">
+                        <Text
+                          className={`font-semibold ${
+                            task.isComplete
+                              ? "text-gray-400 line-through"
+                              : "text-gray-800"
+                          }`}
+                          numberOfLines={1}
+                        >
+                          {task.title}
+                        </Text>
+                      </View>
+
+                      {/* Arrow */}
+                      <MaterialIcons
+                        name={
+                          task.isComplete
+                            ? "check-circle"
+                            : "radio-button-unchecked"
+                        }
+                        size={20}
+                        color={task.isComplete ? "#10B981" : "#D1D5DB"}
+                      />
+                    </Pressable>
+                  ))}
+                </View>
+              )}
+            </>
+          }
           ListEmptyComponent={renderEmptyState}
           refreshControl={
             <RefreshControl
