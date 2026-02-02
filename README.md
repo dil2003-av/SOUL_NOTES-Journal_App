@@ -1,4 +1,4 @@
-# 🪶 SoulNotes – Daily Journal App
+#  <img width="50" height="50" alt="image" src="https://github.com/user-attachments/assets/f9bd4a9d-f673-454a-94cb-b3e4cfd71797" />SoulNotes – Daily Journal App
 
 > **A digital space to write what your soul feels.**
 
